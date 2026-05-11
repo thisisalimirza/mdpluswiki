@@ -93,6 +93,8 @@ export interface NavPage {
   path: string;
   icon?: string;
   published?: boolean;
+  updatedAt?: string;
+  contentPreview?: string;
 }
 
 export interface NavGroup {
@@ -101,7 +103,21 @@ export interface NavGroup {
   pages: NavPage[];
 }
 
-export function getNavTree(opts: { includeDrafts?: boolean } = {}): NavGroup[] {
+// Extract plain text from markdown for search
+function extractPlainText(content: string): string {
+  return content
+    // Remove MDX components
+    .replace(/<[^>]+>/g, ' ')
+    // Remove markdown links
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove markdown formatting
+    .replace(/[*_#`~]/g, '')
+    // Remove extra whitespace
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function getNavTree(opts: { includeDrafts?: boolean; includeContent?: boolean } = {}): NavGroup[] {
   const pages = getAllPages(opts);
   const grouped: Record<Section, NavPage[]> = {
     overview: [],
@@ -110,18 +126,70 @@ export function getNavTree(opts: { includeDrafts?: boolean } = {}): NavGroup[] {
     admin: [],
   };
   for (const p of pages) {
-    grouped[p.frontmatter.section].push({
+    const navPage: NavPage = {
       title: p.frontmatter.title,
       slug: p.slug,
       path: p.path,
       icon: p.frontmatter.icon,
       published: p.frontmatter.published,
-    });
+      updatedAt: p.frontmatter.updatedAt,
+    };
+    if (opts.includeContent) {
+      navPage.contentPreview = extractPlainText(p.content).slice(0, 500);
+    }
+    grouped[p.frontmatter.section].push(navPage);
   }
   return SECTION_ORDER.map((section) => ({
     section,
     label: SECTION_LABELS[section],
     pages: grouped[section],
+  }));
+}
+
+// Get all pages with content for full-text search
+export function getSearchablePages(): Array<NavPage & { section: Section; sectionLabel: string }> {
+  const pages = getAllPages();
+  return pages.map((p) => ({
+    title: p.frontmatter.title,
+    slug: p.slug,
+    path: p.path,
+    icon: p.frontmatter.icon,
+    published: p.frontmatter.published,
+    updatedAt: p.frontmatter.updatedAt,
+    contentPreview: extractPlainText(p.content).slice(0, 500),
+    section: p.frontmatter.section,
+    sectionLabel: SECTION_LABELS[p.frontmatter.section],
+  }));
+}
+
+// Get recent changes sorted by updatedAt
+export function getRecentChanges(limit: number = 10): Array<{
+  title: string;
+  path: string;
+  section: Section;
+  sectionLabel: string;
+  updatedAt: string;
+  icon?: string;
+}> {
+  const pages = getAllPages();
+
+  // Sort by updatedAt descending
+  const sorted = pages
+    .filter((p) => p.frontmatter.updatedAt)
+    .sort((a, b) => {
+      const dateA = new Date(a.frontmatter.updatedAt || '').getTime();
+      const dateB = new Date(b.frontmatter.updatedAt || '').getTime();
+      return dateB - dateA;
+    })
+    .slice(0, limit);
+
+  return sorted.map((p) => ({
+    title: p.frontmatter.title,
+    path: p.path,
+    section: p.frontmatter.section,
+    sectionLabel: SECTION_LABELS[p.frontmatter.section],
+    updatedAt: p.frontmatter.updatedAt || '',
+    icon: p.frontmatter.icon,
   }));
 }
 
