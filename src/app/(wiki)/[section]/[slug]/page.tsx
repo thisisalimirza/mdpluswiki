@@ -21,9 +21,10 @@ export async function generateStaticParams() {
 export async function generateMetadata({
   params,
 }: {
-  params: { section: string; slug: string };
+  params: Promise<{ section: string; slug: string }>;
 }) {
-  const page = getPage(params.section, params.slug);
+  const { section, slug } = await params;
+  const page = getPage(section, slug);
   if (!page) return { title: 'Not found · MDplus Wiki' };
   return {
     title: `${page.frontmatter.title} · MDplus Wiki`,
@@ -31,8 +32,9 @@ export async function generateMetadata({
   };
 }
 
-export default function WikiPageRoute({ params }: { params: { section: string; slug: string } }) {
-  const page = getPage(params.section, params.slug);
+export default async function WikiPageRoute({ params }: { params: Promise<{ section: string; slug: string }> }) {
+  const { section, slug } = await params;
+  const page = getPage(section, slug);
   if (!page) notFound();
   const toc = extractToc(page.content);
   const allPages = getAllPages({ includeDrafts: true }).map((p) => ({
@@ -85,7 +87,7 @@ export default function WikiPageRoute({ params }: { params: { section: string; s
         />
       </article>
 
-      <PageFooter section={page.frontmatter.section} slug={params.slug} />
+      <PageFooter section={page.frontmatter.section} slug={slug} />
     </WikiShell>
   );
 }
