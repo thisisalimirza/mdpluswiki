@@ -147,19 +147,23 @@ export function getNavTree(opts: { includeDrafts?: boolean; includeContent?: boo
 }
 
 // Get all pages with content for full-text search
-export function getSearchablePages(): Array<NavPage & { section: Section; sectionLabel: string }> {
+export function getSearchablePages(): Array<NavPage & { section: Section; sectionLabel: string; searchContent: string }> {
   const pages = getAllPages();
-  return pages.map((p) => ({
-    title: p.frontmatter.title,
-    slug: p.slug,
-    path: p.path,
-    icon: p.frontmatter.icon,
-    published: p.frontmatter.published,
-    updatedAt: p.frontmatter.updatedAt,
-    contentPreview: extractPlainText(p.content).slice(0, 500),
-    section: p.frontmatter.section,
-    sectionLabel: SECTION_LABELS[p.frontmatter.section],
-  }));
+  return pages.map((p) => {
+    const plainText = extractPlainText(p.content);
+    return {
+      title: p.frontmatter.title,
+      slug: p.slug,
+      path: p.path,
+      icon: p.frontmatter.icon,
+      published: p.frontmatter.published,
+      updatedAt: p.frontmatter.updatedAt,
+      contentPreview: plainText.slice(0, 500),
+      searchContent: plainText, // Full content for searching
+      section: p.frontmatter.section,
+      sectionLabel: SECTION_LABELS[p.frontmatter.section],
+    };
+  });
 }
 
 // Get recent changes sorted by updatedAt

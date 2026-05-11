@@ -7,7 +7,7 @@ import * as Icons from '@tabler/icons-react';
 import Fuse from 'fuse.js';
 import type { NavGroup, NavPage, Section } from '@/lib/content';
 
-type SearchablePage = NavPage & { section: Section; sectionLabel: string };
+type SearchablePage = NavPage & { section: Section; sectionLabel: string; searchContent: string };
 type RecentChange = {
   title: string;
   path: string;
@@ -64,11 +64,12 @@ export default function Sidebar({
       new Fuse(searchablePages, {
         keys: [
           { name: 'title', weight: 2 },
-          { name: 'contentPreview', weight: 1 },
+          { name: 'searchContent', weight: 1 },
         ],
-        threshold: 0.3,
+        threshold: 0.4,
         includeMatches: true,
         minMatchCharLength: 2,
+        ignoreLocation: true, // Search entire content, not just beginning
       }),
     [searchablePages]
   );
