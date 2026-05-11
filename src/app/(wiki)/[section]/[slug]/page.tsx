@@ -7,6 +7,7 @@ import { getAllPages, getPage, SECTION_LABELS, SECTION_ORDER, type Section } fro
 import { extractToc } from '@/lib/toc';
 import { mdxComponents } from '@/components/MdxComponents';
 import WikiShell from '@/components/WikiShell';
+import SearchHighlight from '@/components/SearchHighlight';
 
 export const dynamic = 'force-static';
 export const dynamicParams = true;
@@ -47,6 +48,7 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ sect
 
   return (
     <WikiShell path={page.path} toc={toc} pages={allPages}>
+      <SearchHighlight />
       <nav className="flex items-center gap-1.5 text-[12px] text-muted mb-3">
         <Link href="/overview/home" className="hover:text-brand">
           MDplus Wiki

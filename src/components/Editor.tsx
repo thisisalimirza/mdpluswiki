@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import * as Icons from '@tabler/icons-react';
 import type { IconProps } from '@tabler/icons-react';
 import {
@@ -298,20 +299,219 @@ function IconPicker({
   );
 }
 
-// Preview component for rendering markdown
-function MarkdownPreview({ content }: { content: string }) {
-  // Strip MDX components for basic preview
-  const cleanContent = content
-    .replace(/<Callout[^>]*>([\s\S]*?)<\/Callout>/g, (_, inner) => `> ${inner.trim()}`)
-    .replace(/<LinkCard[^>]*\/>/g, '[Link Card]')
-    .replace(/<PersonRow[^>]*\/>/g, '[Person]');
+// Parse MDX component props
+function parseComponentProps(tag: string): Record<string, string> {
+  const props: Record<string, string> = {};
+  const regex = /(\w+)=(?:"([^"]*)"|{([^}]*)}|'([^']*)')/g;
+  let match;
+  while ((match = regex.exec(tag)) !== null) {
+    props[match[1]] = match[2] || match[3] || match[4] || '';
+  }
+  return props;
+}
+
+// Preview components that approximate the real MDX components
+function PreviewCallout({ type, title, children }: { type?: string; title?: string; children: string }) {
+  const styles: Record<string, { bg: string; border: string; icon: string }> = {
+    info: { bg: '#F4F3FB', border: '#534AB7', icon: 'info-circle' },
+    warning: { bg: '#FEF7EC', border: '#D58A1A', icon: 'alert-triangle' },
+    success: { bg: '#EDF8F2', border: '#1A8A4A', icon: 'circle-check' },
+    tip: { bg: '#EEF6FB', border: '#1E6E9E', icon: 'bulb' },
+  };
+  const s = styles[type || 'info'] || styles.info;
+  const IconComponent = getIconComponent(s.icon);
 
   return (
-    <div className="prose prose-sm max-w-none">
-      <ReactMarkdown>{cleanContent}</ReactMarkdown>
+    <div
+      className="my-4 rounded-lg border-l-4 px-4 py-3 flex gap-3"
+      style={{ background: s.bg, borderColor: s.border }}
+    >
+      <IconComponent size={18} stroke={1.75} style={{ color: s.border }} className="shrink-0 mt-0.5" />
+      <div className="text-[14px] leading-relaxed">
+        {title && <div className="font-semibold mb-1">{title}</div>}
+        <div>{children}</div>
+      </div>
     </div>
   );
 }
+
+function PreviewLinkCard({ href, title, description, icon }: { href?: string; title?: string; description?: string; icon?: string }) {
+  const IconComponent = getIconComponent(icon || 'link');
+  return (
+    <div className="block border border-gray-200 rounded-lg p-3.5 my-2 bg-white">
+      <div className="flex items-start gap-3">
+        <div className="w-8 h-8 rounded-md bg-brand-50 text-brand grid place-items-center shrink-0">
+          <IconComponent size={16} stroke={1.75} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <div className="font-semibold text-[14px] text-ink">{title || href || 'Link'}</div>
+            {href?.startsWith('http') && <Icons.IconExternalLink size={12} stroke={1.75} className="text-muted" />}
+          </div>
+          {description && <div className="text-[13px] text-muted mt-0.5">{description}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PreviewPersonRow({ name, role, email, slack }: { name?: string; role?: string; email?: string; slack?: string }) {
+  const initials = (name || 'UN')
+    .split(' ')
+    .map((p) => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  return (
+    <div className="flex items-center gap-3 py-2 border-b border-gray-200 last:border-b-0">
+      <div className="w-9 h-9 rounded-full bg-brand-100 text-brand-700 grid place-items-center font-semibold text-[12px]">
+        {initials}
+      </div>
+      <div className="flex-1">
+        <div className="font-semibold text-[14px]">{name || 'Name'}</div>
+        <div className="text-[12px] text-muted">{role || 'Role'}</div>
+      </div>
+      <div className="flex items-center gap-3 text-[12px] text-muted">
+        {email && <span>{email}</span>}
+        {slack && <span className="text-brand">@{slack}</span>}
+      </div>
+    </div>
+  );
+}
+
+function getIconComponent(name: string) {
+  const key = 'Icon' + name.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+  return (Icons as unknown as Record<string, React.ComponentType<IconProps>>)[key] || Icons.IconFile;
+}
+
+// Preview component for rendering markdown with proper styling
+function MarkdownPreview({ content, title }: { content: string; title: string }) {
+  // Process MDX components into renderable elements
+  const processedContent = useMemo(() => {
+    const elements: React.ReactNode[] = [];
+    let remaining = content;
+    let key = 0;
+
+    // Process content line by line, extracting MDX components
+    while (remaining.length > 0) {
+      // Check for Callout
+      const calloutMatch = remaining.match(/^([\s\S]*?)<Callout([^>]*)>([\s\S]*?)<\/Callout>/);
+      if (calloutMatch) {
+        if (calloutMatch[1]) {
+          elements.push(
+            <ReactMarkdown key={key++} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {calloutMatch[1]}
+            </ReactMarkdown>
+          );
+        }
+        const props = parseComponentProps(calloutMatch[2]);
+        elements.push(
+          <PreviewCallout key={key++} type={props.type} title={props.title}>
+            {calloutMatch[3].trim()}
+          </PreviewCallout>
+        );
+        remaining = remaining.slice(calloutMatch[0].length);
+        continue;
+      }
+
+      // Check for LinkCard
+      const linkCardMatch = remaining.match(/^([\s\S]*?)<LinkCard([^/]*)\/?>/);
+      if (linkCardMatch) {
+        if (linkCardMatch[1]) {
+          elements.push(
+            <ReactMarkdown key={key++} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {linkCardMatch[1]}
+            </ReactMarkdown>
+          );
+        }
+        const props = parseComponentProps(linkCardMatch[2]);
+        elements.push(
+          <PreviewLinkCard key={key++} href={props.href} title={props.title} description={props.description} icon={props.icon} />
+        );
+        remaining = remaining.slice(linkCardMatch[0].length);
+        continue;
+      }
+
+      // Check for PersonRow
+      const personMatch = remaining.match(/^([\s\S]*?)<PersonRow([^/]*)\/?>/);
+      if (personMatch) {
+        if (personMatch[1]) {
+          elements.push(
+            <ReactMarkdown key={key++} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {personMatch[1]}
+            </ReactMarkdown>
+          );
+        }
+        const props = parseComponentProps(personMatch[2]);
+        elements.push(
+          <PreviewPersonRow key={key++} name={props.name} role={props.role} email={props.email} slack={props.slack} />
+        );
+        remaining = remaining.slice(personMatch[0].length);
+        continue;
+      }
+
+      // No more MDX components, render rest as markdown
+      elements.push(
+        <ReactMarkdown key={key++} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {remaining}
+        </ReactMarkdown>
+      );
+      break;
+    }
+
+    return elements;
+  }, [content]);
+
+  return (
+    <div className="prose max-w-none">
+      <h1 className="font-serif text-[32px] leading-[1.15] mb-4">{title}</h1>
+      {processedContent}
+    </div>
+  );
+}
+
+// Custom components for ReactMarkdown to match actual page styling
+const markdownComponents = {
+  h2: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h2 className="font-serif text-[24px] mt-8 mb-4 text-ink" {...props}>{children}</h2>
+  ),
+  h3: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement>) => (
+    <h3 className="font-semibold text-[18px] mt-6 mb-3 text-ink" {...props}>{children}</h3>
+  ),
+  table: ({ children, ...props }: React.HTMLAttributes<HTMLTableElement>) => (
+    <div className="overflow-x-auto my-4">
+      <table className="min-w-full border-collapse border border-gray-200 text-[14px]" {...props}>{children}</table>
+    </div>
+  ),
+  th: ({ children, ...props }: React.HTMLAttributes<HTMLTableCellElement>) => (
+    <th className="border border-gray-200 bg-gray-50 px-3 py-2 text-left font-semibold" {...props}>{children}</th>
+  ),
+  td: ({ children, ...props }: React.HTMLAttributes<HTMLTableCellElement>) => (
+    <td className="border border-gray-200 px-3 py-2" {...props}>{children}</td>
+  ),
+  ul: ({ children, ...props }: React.HTMLAttributes<HTMLUListElement>) => (
+    <ul className="list-disc pl-6 my-3 space-y-1" {...props}>{children}</ul>
+  ),
+  ol: ({ children, ...props }: React.HTMLAttributes<HTMLOListElement>) => (
+    <ol className="list-decimal pl-6 my-3 space-y-1" {...props}>{children}</ol>
+  ),
+  li: ({ children, ...props }: React.HTMLAttributes<HTMLLIElement>) => (
+    <li className="text-[15px]" {...props}>{children}</li>
+  ),
+  p: ({ children, ...props }: React.HTMLAttributes<HTMLParagraphElement>) => (
+    <p className="my-3 text-[15px] leading-relaxed" {...props}>{children}</p>
+  ),
+  a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a className="text-brand hover:underline" href={href} {...props}>{children}</a>
+  ),
+  strong: ({ children, ...props }: React.HTMLAttributes<HTMLElement>) => (
+    <strong className="font-semibold" {...props}>{children}</strong>
+  ),
+  code: ({ children, ...props }: React.HTMLAttributes<HTMLElement>) => (
+    <code className="bg-gray-100 px-1.5 py-0.5 rounded text-[13px] font-mono" {...props}>{children}</code>
+  ),
+};
 
 export default function Editor({
   mode,
@@ -839,10 +1039,7 @@ Tips:
                   ) : (
                     <div className="min-h-[35vh] px-4 py-4 border border-hairline rounded-md bg-white overflow-y-auto">
                       {body ? (
-                        <>
-                          <h1 className="font-serif text-[28px] mb-4">{title || 'Untitled'}</h1>
-                          <MarkdownPreview content={body} />
-                        </>
+                        <MarkdownPreview content={body} title={title || 'Untitled'} />
                       ) : (
                         <div className="text-center text-muted py-10">
                           Nothing to preview yet. Start writing in the Edit tab.

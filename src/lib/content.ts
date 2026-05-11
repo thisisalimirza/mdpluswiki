@@ -146,7 +146,7 @@ export function getNavTree(opts: { includeDrafts?: boolean; includeContent?: boo
   }));
 }
 
-// Get all pages with content for full-text search
+// Get all pages with content for full-text search (legacy - kept for compatibility)
 export function getSearchablePages(): Array<NavPage & { section: Section; sectionLabel: string; searchContent: string }> {
   const pages = getAllPages();
   return pages.map((p) => {
@@ -159,11 +159,85 @@ export function getSearchablePages(): Array<NavPage & { section: Section; sectio
       published: p.frontmatter.published,
       updatedAt: p.frontmatter.updatedAt,
       contentPreview: plainText.slice(0, 500),
-      searchContent: plainText, // Full content for searching
+      searchContent: plainText,
       section: p.frontmatter.section,
       sectionLabel: SECTION_LABELS[p.frontmatter.section],
     };
   });
+}
+
+// Convert heading text to URL-friendly slug
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+// Parse markdown content into sections by heading
+export interface SearchSection {
+  pageTitle: string;
+  pagePath: string;
+  pageIcon?: string;
+  wikiSection: Section;
+  sectionLabel: string;
+  heading: string;
+  headingSlug: string;
+  headingLevel: number;
+  content: string;
+}
+
+export function getSearchIndex(): SearchSection[] {
+  const pages = getAllPages();
+  const sections: SearchSection[] = [];
+
+  for (const page of pages) {
+    const lines = page.content.split('\n');
+    let currentHeading = page.frontmatter.title;
+    let currentSlug = '';
+    let currentLevel = 1;
+    let currentContent: string[] = [];
+
+    const flushSection = () => {
+      const content = currentContent
+        .join('\n')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/[*_`~]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (content.length > 0) {
+        sections.push({
+          pageTitle: page.frontmatter.title,
+          pagePath: page.path,
+          pageIcon: page.frontmatter.icon,
+          wikiSection: page.frontmatter.section,
+          sectionLabel: SECTION_LABELS[page.frontmatter.section],
+          heading: currentHeading,
+          headingSlug: currentSlug,
+          headingLevel: currentLevel,
+          content,
+        });
+      }
+    };
+
+    for (const line of lines) {
+      const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        flushSection();
+        currentLevel = headingMatch[1].length;
+        currentHeading = headingMatch[2].replace(/[*_`]/g, '');
+        currentSlug = slugify(currentHeading);
+        currentContent = [];
+      } else {
+        currentContent.push(line);
+      }
+    }
+    flushSection();
+  }
+
+  return sections;
 }
 
 // Get recent changes sorted by updatedAt
