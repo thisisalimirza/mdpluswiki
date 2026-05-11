@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand: #534ab7;
+  --hairline: rgba(0, 0, 0, 0.1);
+  --sidebar: #f7f6f3;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: #ffffff;
+  color: #1a1a1a;
+  font-family: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ───── Prose: wiki page body styling ───── */
+.prose {
+  font-size: 15px;
+  line-height: 1.65;
+  color: #1a1a1a;
+}
+.prose h2 {
+  font-family: var(--font-dm-serif), Georgia, serif;
+  font-size: 24px;
+  line-height: 1.25;
+  margin-top: 36px;
+  margin-bottom: 12px;
+  scroll-margin-top: 80px;
+}
+.prose h3 {
+  font-size: 17px;
+  font-weight: 600;
+  margin-top: 24px;
+  margin-bottom: 8px;
+  scroll-margin-top: 80px;
+}
+.prose h4 {
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5c5c5c;
+  margin-top: 20px;
+  margin-bottom: 6px;
+}
+.prose p {
+  margin: 0 0 12px 0;
+}
+.prose a {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose a:hover {
+  text-decoration-thickness: 2px;
+}
+.prose ul,
+.prose ol {
+  margin: 8px 0 16px 0;
+  padding-left: 22px;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose li {
+  margin: 4px 0;
+}
+.prose li > ul,
+.prose li > ol {
+  margin: 4px 0;
+}
+.prose strong {
+  font-weight: 600;
+}
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  margin: 24px 0;
+}
+.prose blockquote {
+  border-left: 3px solid var(--brand);
+  background: #f7f6f3;
+  padding: 8px 14px;
+  margin: 16px 0;
+  border-radius: 0 8px 8px 0;
+  color: #2b2b58;
+}
+.prose code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  background: #f4f3fb;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.prose pre {
+  background: #1c1944;
+  color: #f4f3fb;
+  padding: 14px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-x: auto;
+  margin: 12px 0 18px 0;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 14px;
+}
+.prose th,
+.prose td {
+  border: 1px solid var(--hairline);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+.prose th {
+  background: #f7f6f3;
+  font-weight: 600;
+}
+.prose input[type='checkbox'] {
+  accent-color: var(--brand);
+  margin-right: 6px;
+}
+
+/* ───── Sidebar scrollbar ───── */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 3px;
+}
