@@ -899,6 +899,13 @@ export default function Editor({
   const [editingSectionData, setEditingSectionData] = useState<{ label: string; icon: string; order: number; parent: string } | null>(null);
   const [savingSectionId, setSavingSectionId] = useState<string | null>(null);
 
+  // Pending order changes (not yet committed)
+  const [pendingPageOrders, setPendingPageOrders] = useState<Map<string, number>>(new Map());
+  const [pendingSectionOrders, setPendingSectionOrders] = useState<Map<string, number>>(new Map());
+  const [savingOrders, setSavingOrders] = useState(false);
+
+  const hasPendingChanges = pendingPageOrders.size > 0 || pendingSectionOrders.size > 0;
+
   // Editor name for tracking who made changes
   const [editorName, setEditorNameState] = useState<string>('');
   const [showNamePrompt, setShowNamePrompt] = useState(false);
@@ -1430,7 +1437,7 @@ export default function Editor({
   );
 
   // Handle section reorder via drag-and-drop
-  async function handleSectionDragEnd(event: DragEndEvent) {
+  function handleSectionDragEnd(event: DragEndEvent) {
     const { active, over } = event;
 
     if (!over || active.id === over.id) return;
@@ -1440,62 +1447,22 @@ export default function Editor({
 
     if (oldIndex === -1 || newIndex === -1) return;
 
-    // Optimistically update local state
+    // Update local state
     const newSections = arrayMove(sections, oldIndex, newIndex);
-    setSections(newSections);
+    setSections(newSections.map((s, idx) => ({ ...s, order: (idx + 1) * 10 })));
 
-    // Calculate new order values based on position
-    const updates: Array<{ id: string; order: number }> = [];
-    newSections.forEach((s, idx) => {
-      const newOrder = (idx + 1) * 10; // Use increments of 10 for flexibility
-      if (s.order !== newOrder) {
-        updates.push({ id: s.id, order: newOrder });
-      }
-    });
-
-    if (updates.length === 0) return;
-
-    // Save all order changes in a single batch commit
-    try {
-      const token = await ensureToken();
-      if (!token) return;
-
-      const res = await fetch('/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'batch-reorder-sections',
-          token,
-          updates: updates.map(u => ({ sectionId: u.id, order: u.order })),
-        }),
+    // Track pending changes
+    setPendingSectionOrders(prev => {
+      const next = new Map(prev);
+      newSections.forEach((s, idx) => {
+        next.set(s.id, (idx + 1) * 10);
       });
-
-      if (!res.ok) {
-        const json = await res.json();
-        throw new Error(json.error || 'Failed to update order');
-      }
-
-      // Update local state with new order values
-      setSections(prev => prev.map(s => {
-        const update = updates.find(u => u.id === s.id);
-        return update ? { ...s, order: update.order } : s;
-      }));
-
-      setToast('Section order updated');
-      setTimeout(() => router.refresh(), 800);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update order');
-      // Revert on error
-      const sectionsRes = await fetch('/api/sections');
-      const sectionsJson = await sectionsRes.json();
-      if (sectionsJson.sections) {
-        setSections(sectionsJson.sections);
-      }
-    }
+      return next;
+    });
   }
 
   // Handle page reorder via drag-and-drop within a section
-  async function handlePageDragEnd(sectionId: string, event: DragEndEvent) {
+  function handlePageDragEnd(sectionId: string, event: DragEndEvent) {
     const { active, over } = event;
 
     if (!over || active.id === over.id) return;
@@ -1510,18 +1477,7 @@ export default function Editor({
     // Reorder pages in this section
     const reorderedSectionPages = arrayMove(sectionPages, oldIndex, newIndex);
 
-    // Calculate new order values based on position
-    const updates: Array<{ path: string; order: number }> = [];
-    reorderedSectionPages.forEach((p, idx) => {
-      const newOrder = (idx + 1) * 10;
-      if ((p.order ?? 999) !== newOrder) {
-        updates.push({ path: p.path, order: newOrder });
-      }
-    });
-
-    if (updates.length === 0) return;
-
-    // Optimistically update local state
+    // Update local state
     setPages(prev => {
       const otherPages = prev.filter(p => p.section !== sectionId);
       const updatedSectionPages = reorderedSectionPages.map((p, idx) => ({
@@ -1531,36 +1487,105 @@ export default function Editor({
       return [...otherPages, ...updatedSectionPages];
     });
 
-    // Save all order changes in a single batch commit
+    // Track pending changes
+    setPendingPageOrders(prev => {
+      const next = new Map(prev);
+      reorderedSectionPages.forEach((p, idx) => {
+        next.set(p.path, (idx + 1) * 10);
+      });
+      return next;
+    });
+  }
+
+  // Save all pending order changes
+  async function savePendingOrders() {
+    if (!hasPendingChanges) return;
+
+    setSavingOrders(true);
+    setError(null);
+
     try {
       const token = await ensureToken();
-      if (!token) return;
-
-      const res = await fetch('/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'batch-reorder-pages',
-          token,
-          updates,
-        }),
-      });
-
-      if (!res.ok) {
-        const json = await res.json();
-        throw new Error(json.error || 'Failed to update order');
+      if (!token) {
+        setSavingOrders(false);
+        return;
       }
 
-      setToast('Page order updated');
+      // Save page orders if any
+      if (pendingPageOrders.size > 0) {
+        const pageUpdates = Array.from(pendingPageOrders.entries()).map(([path, order]) => ({
+          path,
+          order,
+        }));
+
+        const res = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'batch-reorder-pages',
+            token,
+            updates: pageUpdates,
+          }),
+        });
+
+        if (!res.ok) {
+          const json = await res.json();
+          throw new Error(json.error || 'Failed to save page order');
+        }
+      }
+
+      // Save section orders if any
+      if (pendingSectionOrders.size > 0) {
+        const sectionUpdates = Array.from(pendingSectionOrders.entries()).map(([sectionId, order]) => ({
+          sectionId,
+          order,
+        }));
+
+        const res = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'batch-reorder-sections',
+            token,
+            updates: sectionUpdates,
+          }),
+        });
+
+        if (!res.ok) {
+          const json = await res.json();
+          throw new Error(json.error || 'Failed to save section order');
+        }
+      }
+
+      // Clear pending changes
+      setPendingPageOrders(new Map());
+      setPendingSectionOrders(new Map());
+      setToast('Order changes saved');
       setTimeout(() => router.refresh(), 800);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update page order');
-      // Revert on error - refetch pages
-      const pagesRes = await fetch('/api/pages');
+      setError(e instanceof Error ? e.message : 'Failed to save order changes');
+    } finally {
+      setSavingOrders(false);
+    }
+  }
+
+  // Discard pending order changes
+  async function discardPendingOrders() {
+    setPendingPageOrders(new Map());
+    setPendingSectionOrders(new Map());
+
+    // Refetch to restore original order
+    try {
+      const [pagesRes, sectionsRes] = await Promise.all([
+        fetch('/api/pages'),
+        fetch('/api/sections'),
+      ]);
       const pagesJson = await pagesRes.json();
-      if (pagesJson.pages) {
-        setPages(pagesJson.pages);
-      }
+      const sectionsJson = await sectionsRes.json();
+      if (pagesJson.pages) setPages(pagesJson.pages);
+      if (sectionsJson.sections) setSections(sectionsJson.sections);
+    } catch {
+      // Ignore errors
     }
   }
 
@@ -2535,18 +2560,43 @@ Tips:
             <div className="text-[11px] text-muted">
               {mode.kind === 'import'
                 ? `${importFiles.length} files ready to import`
+                : mode.kind === 'manage' && hasPendingChanges
+                ? `${pendingPageOrders.size + pendingSectionOrders.size} unsaved order changes`
                 : mode.kind !== 'manage'
                 ? 'Saving commits to GitHub. Vercel redeploys automatically.'
-                : 'Page history available in the GitHub repo.'}
+                : 'Drag items to reorder, then click Save.'}
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleClose}
-              className="px-3 py-1.5 rounded-md text-[13px] text-muted hover:bg-black/[0.04]"
-            >
-              Close
-            </button>
+            {/* Discard button for manage mode with pending changes */}
+            {mode.kind === 'manage' && hasPendingChanges && (
+              <button
+                onClick={discardPendingOrders}
+                className="px-3 py-1.5 rounded-md text-[13px] text-muted hover:bg-black/[0.04]"
+              >
+                Discard
+              </button>
+            )}
+            {/* Save order changes button for manage mode */}
+            {mode.kind === 'manage' && hasPendingChanges && (
+              <button
+                onClick={savePendingOrders}
+                disabled={savingOrders}
+                className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50 flex items-center gap-2"
+              >
+                <Icons.IconDeviceFloppy size={14} stroke={1.75} />
+                {savingOrders ? 'Saving...' : 'Save changes'}
+              </button>
+            )}
+            {/* Close button - hide when there are pending changes in manage mode */}
+            {!(mode.kind === 'manage' && hasPendingChanges) && (
+              <button
+                onClick={handleClose}
+                className="px-3 py-1.5 rounded-md text-[13px] text-muted hover:bg-black/[0.04]"
+              >
+                Close
+              </button>
+            )}
             {/* Import button */}
             {mode.kind === 'import' && (
               <button
