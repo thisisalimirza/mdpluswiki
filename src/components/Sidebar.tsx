@@ -4,19 +4,19 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as Icons from '@tabler/icons-react';
-import type { NavGroup, Section } from '@/lib/content';
+import type { NavGroup } from '@/lib/content';
 
 type RecentChange = {
   title: string;
   path: string;
-  section: Section;
+  section: string;
   sectionLabel: string;
   updatedAt: string;
   icon?: string;
 };
 
 function getIcon(name: string | undefined) {
-  if (!name) return Icons.IconFile;
+  if (!name) return Icons.IconFolder;
   const key =
     'Icon' +
     name
@@ -24,7 +24,7 @@ function getIcon(name: string | undefined) {
       .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
       .join('');
   const I = (Icons as unknown as Record<string, React.ComponentType<{ size?: number; stroke?: number }>>)[key];
-  return I ?? Icons.IconFile;
+  return I ?? Icons.IconFolder;
 }
 
 function formatDate(dateStr: string): string {
@@ -48,9 +48,15 @@ export default function Sidebar({
   recentChanges: RecentChange[];
 }) {
   const pathname = usePathname();
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(tree.map(g => g.section))
-  );
+
+  // Initialize all top-level sections as expanded
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(() => {
+    const expanded = new Set<string>();
+    tree.forEach(g => {
+      if (g.depth === 0) expanded.add(g.section);
+    });
+    return expanded;
+  });
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => {
@@ -63,6 +69,80 @@ export default function Sidebar({
       return next;
     });
   };
+
+  // Build tree structure for nested display
+  const topLevelSections = tree.filter(g => g.depth === 0);
+
+  function getChildSections(parentId: string): NavGroup[] {
+    return tree.filter(g => g.parent === parentId);
+  }
+
+  function renderSection(group: NavGroup) {
+    const isExpanded = expandedSections.has(group.section);
+    const SectionIcon = getIcon(group.icon);
+    const childSections = getChildSections(group.section);
+    const hasChildren = childSections.length > 0 || group.pages.length > 0;
+    const indentClass = group.depth > 0 ? `ml-${group.depth * 3}` : '';
+
+    return (
+      <div key={group.section} className={`mb-1 ${indentClass}`}>
+        <button
+          onClick={() => toggleSection(group.section)}
+          className="w-full flex items-center gap-1.5 px-2 pt-2 pb-1.5 text-[11px] font-semibold tracking-[0.04em] uppercase text-muted hover:text-ink transition-colors"
+        >
+          <Icons.IconChevronRight
+            size={12}
+            stroke={2}
+            className={`transition-transform shrink-0 ${isExpanded ? 'rotate-90' : ''}`}
+          />
+          <SectionIcon size={13} stroke={1.75} className="shrink-0" />
+          <span className="truncate">{group.label}</span>
+          <span className="ml-auto text-[10px] font-normal opacity-60">
+            {group.pages.length}
+          </span>
+        </button>
+
+        {isExpanded && hasChildren && (
+          <div className="ml-2">
+            {/* Render child sections first */}
+            {childSections.map(child => renderSection(child))}
+
+            {/* Then render pages */}
+            {group.pages.length > 0 && (
+              <ul className="ml-1">
+                {group.pages.map((page) => {
+                  const PageIcon = getIcon(page.icon);
+                  const href = `/${page.path}`;
+                  const active = pathname === href;
+                  return (
+                    <li key={page.path}>
+                      <Link
+                        href={href}
+                        className={[
+                          'flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px]',
+                          active
+                            ? 'bg-brand text-white'
+                            : 'text-ink hover:bg-black/[0.04]',
+                          page.published === false ? 'opacity-60 italic' : '',
+                        ].join(' ')}
+                      >
+                        <PageIcon
+                          size={15}
+                          stroke={1.75}
+                          className={active ? 'text-white' : 'text-muted'}
+                        />
+                        <span className="truncate">{page.title}</span>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <aside className="hidden md:flex md:w-[240px] md:flex-col border-r border-hairline bg-sidebar h-screen sticky top-0">
@@ -82,7 +162,6 @@ export default function Sidebar({
       <div className="px-3 pb-3">
         <button
           onClick={() => {
-            // Trigger global search modal via keyboard event
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }));
           }}
           className="w-full flex items-center gap-2 px-2.5 py-1.5 text-[13px] text-muted bg-white border border-hairline rounded-md hover:border-gray-300 hover:bg-gray-50 transition-colors"
@@ -97,57 +176,7 @@ export default function Sidebar({
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto scrollbar-thin px-2 pb-3">
-        {tree.map((group) => {
-          const isExpanded = expandedSections.has(group.section);
-          return (
-            <div key={group.section} className="mb-2">
-              <button
-                onClick={() => toggleSection(group.section)}
-                className="w-full flex items-center gap-1 px-2 pt-2 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] uppercase text-muted hover:text-ink transition-colors"
-              >
-                <Icons.IconChevronRight
-                  size={12}
-                  stroke={2}
-                  className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                />
-                {group.label}
-                <span className="ml-auto text-[10px] font-normal opacity-60">
-                  {group.pages.length}
-                </span>
-              </button>
-              {isExpanded && (
-                <ul>
-                  {group.pages.map((page) => {
-                    const Icon = getIcon(page.icon);
-                    const href = `/${page.path}`;
-                    const active = pathname === href;
-                    return (
-                      <li key={page.path}>
-                        <Link
-                          href={href}
-                          className={[
-                            'flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px]',
-                            active
-                              ? 'bg-brand text-white'
-                              : 'text-ink hover:bg-black/[0.04]',
-                            page.published === false ? 'opacity-60 italic' : '',
-                          ].join(' ')}
-                        >
-                          <Icon
-                            size={15}
-                            stroke={1.75}
-                            className={active ? 'text-white' : 'text-muted'}
-                          />
-                          <span className="truncate">{page.title}</span>
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          );
-        })}
+        {topLevelSections.map(group => renderSection(group))}
       </nav>
 
       {/* Recent Changes */}

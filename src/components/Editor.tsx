@@ -12,12 +12,19 @@ import {
   setStoredToken,
 } from './AuthGate';
 
-const SECTIONS = ['overview', 'operations', 'communities', 'admin'] as const;
-type Section = (typeof SECTIONS)[number];
+// Section info from API
+interface SectionInfo {
+  id: string;
+  label: string;
+  icon?: string;
+  order: number;
+  depth: number;
+  parent?: string;
+}
 
 export type EditorMode =
   | { kind: 'edit'; path: string }
-  | { kind: 'new'; defaultSection?: Section }
+  | { kind: 'new'; defaultSection?: string }
   | { kind: 'manage' };
 
 // Popular icons for the icon picker
@@ -63,7 +70,7 @@ function todayHuman(): string {
 
 function buildFrontmatter(opts: {
   title: string;
-  section: Section;
+  section: string;
   icon: string;
   published: boolean;
 }): string {
@@ -525,7 +532,7 @@ export default function Editor({
   const router = useRouter();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [title, setTitle] = useState('');
-  const [section, setSection] = useState<Section>(
+  const [section, setSection] = useState<string>(
     mode.kind === 'new' ? mode.defaultSection || 'overview' : 'overview'
   );
   const [icon, setIcon] = useState('file');
@@ -540,6 +547,29 @@ export default function Editor({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [initialValues, setInitialValues] = useState({ title: '', body: '', icon: 'file' });
   const [draftRestored, setDraftRestored] = useState(false);
+  const [sections, setSections] = useState<SectionInfo[]>([]);
+  const [showNewSection, setShowNewSection] = useState(false);
+  const [newSectionId, setNewSectionId] = useState('');
+  const [newSectionLabel, setNewSectionLabel] = useState('');
+  const [newSectionIcon, setNewSectionIcon] = useState('folder');
+  const [newSectionParent, setNewSectionParent] = useState('');
+  const [creatingSectionLoading, setCreatingSectionLoading] = useState(false);
+
+  // Fetch sections on mount
+  useEffect(() => {
+    async function fetchSections() {
+      try {
+        const res = await fetch('/api/sections');
+        const data = await res.json();
+        if (data.sections) {
+          setSections(data.sections);
+        }
+      } catch (err) {
+        console.error('Failed to fetch sections:', err);
+      }
+    }
+    fetchSections();
+  }, []);
 
   // Track if there are unsaved changes
   useEffect(() => {
@@ -732,7 +762,7 @@ export default function Editor({
         const loadedIcon = String(fm.icon ?? 'file');
 
         setTitle(loadedTitle);
-        setSection((fm.section as Section) ?? 'overview');
+        setSection(String(fm.section ?? 'overview'));
         setIcon(loadedIcon);
         setPublished(fm.published !== false);
         setBody(loadedBody);
@@ -893,18 +923,29 @@ export default function Editor({
                     <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
                       Section
                     </span>
-                    <select
-                      value={section}
-                      onChange={(e) => setSection(e.target.value as Section)}
-                      disabled={mode.kind === 'edit'}
-                      className="px-3 py-2 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100 disabled:bg-sidebar disabled:text-muted"
-                    >
-                      {SECTIONS.map((s) => (
-                        <option key={s} value={s}>
-                          {s.charAt(0).toUpperCase() + s.slice(1)}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex gap-2">
+                      <select
+                        value={section}
+                        onChange={(e) => {
+                          if (e.target.value === '__new__') {
+                            setShowNewSection(true);
+                          } else {
+                            setSection(e.target.value);
+                          }
+                        }}
+                        disabled={mode.kind === 'edit'}
+                        className="flex-1 px-3 py-2 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100 disabled:bg-sidebar disabled:text-muted"
+                      >
+                        {sections.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.depth > 0 ? '└ '.repeat(s.depth) : ''}{s.label}
+                          </option>
+                        ))}
+                        {mode.kind !== 'edit' && (
+                          <option value="__new__">+ New section...</option>
+                        )}
+                      </select>
+                    </div>
                   </label>
                   <label className="flex flex-col gap-1">
                     <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
@@ -1156,6 +1197,176 @@ Tips:
           </div>
         </footer>
       </div>
+
+      {/* New Section Modal */}
+      {showNewSection && (
+        <div className="fixed inset-0 z-[60] bg-black/40 grid place-items-center px-4">
+          <div className="w-full max-w-md bg-white rounded-lg shadow-xl border border-hairline p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Icons.IconFolderPlus size={20} stroke={1.75} className="text-brand" />
+              <h3 className="font-serif text-[20px]">Create new section</h3>
+            </div>
+
+            <div className="space-y-4">
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                  Section name
+                </span>
+                <input
+                  type="text"
+                  value={newSectionLabel}
+                  onChange={(e) => {
+                    setNewSectionLabel(e.target.value);
+                    // Auto-generate ID from label
+                    setNewSectionId(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+                  }}
+                  placeholder="e.g. Meeting Notes"
+                  className="mt-1 w-full px-3 py-2 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                  Section ID (URL path)
+                </span>
+                <input
+                  type="text"
+                  value={newSectionParent ? `${newSectionParent}/${newSectionId}` : newSectionId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    const parts = val.split('/');
+                    if (parts.length > 1) {
+                      setNewSectionParent(parts.slice(0, -1).join('/'));
+                      setNewSectionId(parts[parts.length - 1]);
+                    } else {
+                      setNewSectionParent('');
+                      setNewSectionId(val);
+                    }
+                  }}
+                  placeholder="e.g. meeting-notes or operations/meetings"
+                  className="mt-1 w-full px-3 py-2 border border-hairline rounded-md text-[14px] font-mono focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                />
+                <p className="mt-1 text-[11px] text-muted">
+                  Use a slash to create a subsection (e.g., operations/meetings)
+                </p>
+              </label>
+
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                  Parent section (optional)
+                </span>
+                <select
+                  value={newSectionParent}
+                  onChange={(e) => setNewSectionParent(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                >
+                  <option value="">None (top-level section)</option>
+                  {sections.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.depth > 0 ? '└ '.repeat(s.depth) : ''}{s.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                  Icon
+                </span>
+                <div className="mt-1">
+                  <IconPicker value={newSectionIcon} onChange={setNewSectionIcon} />
+                </div>
+              </label>
+            </div>
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md text-[13px] text-red-700">
+                {error}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  setShowNewSection(false);
+                  setNewSectionId('');
+                  setNewSectionLabel('');
+                  setNewSectionIcon('folder');
+                  setNewSectionParent('');
+                  setError(null);
+                }}
+                className="px-3 py-1.5 rounded-md text-[13px] text-muted hover:bg-black/[0.04]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!newSectionLabel || !newSectionId) {
+                    setError('Section name and ID are required');
+                    return;
+                  }
+
+                  const fullSectionId = newSectionParent ? `${newSectionParent}/${newSectionId}` : newSectionId;
+
+                  setCreatingSectionLoading(true);
+                  setError(null);
+
+                  try {
+                    const token = getStoredToken();
+                    if (!token) {
+                      setError('Not authenticated');
+                      return;
+                    }
+
+                    const res = await fetch('/api/save', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        action: 'create-section',
+                        token,
+                        sectionId: fullSectionId,
+                        label: newSectionLabel,
+                        icon: newSectionIcon,
+                      }),
+                    });
+
+                    const data = await res.json();
+                    if (!res.ok) {
+                      setError(data.error || 'Failed to create section');
+                      return;
+                    }
+
+                    // Add the new section to the list and select it
+                    setSections(prev => [...prev, {
+                      id: fullSectionId,
+                      label: newSectionLabel,
+                      icon: newSectionIcon,
+                      order: 999,
+                      depth: fullSectionId.split('/').length - 1,
+                      parent: newSectionParent || undefined,
+                    }]);
+                    setSection(fullSectionId);
+                    setShowNewSection(false);
+                    setNewSectionId('');
+                    setNewSectionLabel('');
+                    setNewSectionIcon('folder');
+                    setNewSectionParent('');
+                    setToast('Section created! It will appear after deployment.');
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to create section');
+                  } finally {
+                    setCreatingSectionLoading(false);
+                  }
+                }}
+                disabled={creatingSectionLoading || !newSectionLabel || !newSectionId}
+                className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50"
+              >
+                {creatingSectionLoading ? 'Creating...' : 'Create section'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

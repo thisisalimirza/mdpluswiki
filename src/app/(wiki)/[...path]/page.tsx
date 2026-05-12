@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { MDXRemote } from 'next-mdx-remote/rsc';
 import remarkGfm from 'remark-gfm';
 import rehypeSlug from 'rehype-slug';
-import { getAllPages, getPage, SECTION_LABELS, SECTION_ORDER, type Section } from '@/lib/content';
+import { getAllPages, getPage, getSectionLabel } from '@/lib/content';
 import { extractToc } from '@/lib/toc';
 import { mdxComponents } from '@/components/MdxComponents';
 import WikiShell from '@/components/WikiShell';
@@ -14,17 +14,18 @@ export const dynamicParams = true;
 
 export async function generateStaticParams() {
   return getAllPages({ includeDrafts: true }).map((p) => ({
-    section: p.section,
-    slug: p.slug,
+    path: p.path.split('/'),
   }));
 }
 
 export async function generateMetadata({
   params,
 }: {
-  params: Promise<{ section: string; slug: string }>;
+  params: Promise<{ path: string[] }>;
 }) {
-  const { section, slug } = await params;
+  const { path: pathSegments } = await params;
+  const slug = pathSegments.pop()!;
+  const section = pathSegments.join('/');
   const page = getPage(section, slug);
   if (!page) return { title: 'Not found · MDplus Wiki' };
   return {
@@ -33,10 +34,18 @@ export async function generateMetadata({
   };
 }
 
-export default async function WikiPageRoute({ params }: { params: Promise<{ section: string; slug: string }> }) {
-  const { section, slug } = await params;
+export default async function WikiPageRoute({ params }: { params: Promise<{ path: string[] }> }) {
+  const { path: pathSegments } = await params;
+
+  // Need at least section + slug
+  if (pathSegments.length < 2) notFound();
+
+  const slug = pathSegments[pathSegments.length - 1];
+  const section = pathSegments.slice(0, -1).join('/');
+
   const page = getPage(section, slug);
   if (!page) notFound();
+
   const toc = extractToc(page.content);
   const allPages = getAllPages({ includeDrafts: true }).map((p) => ({
     title: p.frontmatter.title,
@@ -44,17 +53,28 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ sect
     section: p.frontmatter.section,
     published: p.frontmatter.published,
   }));
-  const sectionLabel = SECTION_LABELS[page.frontmatter.section as Section];
+
+  const sectionLabel = getSectionLabel(page.frontmatter.section);
+
+  // Build breadcrumb parts
+  const breadcrumbs = section.split('/').map((part, idx, arr) => ({
+    label: getSectionLabel(arr.slice(0, idx + 1).join('/')),
+    path: arr.slice(0, idx + 1).join('/'),
+  }));
 
   return (
     <WikiShell path={page.path} toc={toc} pages={allPages}>
       <SearchHighlight />
-      <nav className="flex items-center gap-1.5 text-[12px] text-muted mb-3">
+      <nav className="flex items-center gap-1.5 text-[12px] text-muted mb-3 flex-wrap">
         <Link href="/overview/home" className="hover:text-brand">
           MDplus Wiki
         </Link>
-        <span>/</span>
-        <span>{sectionLabel}</span>
+        {breadcrumbs.map((crumb, idx) => (
+          <span key={crumb.path} className="flex items-center gap-1.5">
+            <span>/</span>
+            <span>{crumb.label}</span>
+          </span>
+        ))}
         <span>/</span>
         <span className="text-ink">{page.frontmatter.title}</span>
       </nav>
@@ -94,7 +114,7 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ sect
   );
 }
 
-function PageFooter({ section, slug }: { section: Section; slug: string }) {
+function PageFooter({ section, slug }: { section: string; slug: string }) {
   const all = getAllPages().filter((p) => p.frontmatter.section === section);
   const idx = all.findIndex((p) => p.slug === slug);
   const prev = idx > 0 ? all[idx - 1] : null;
@@ -126,4 +146,3 @@ function PageFooter({ section, slug }: { section: Section; slug: string }) {
     </div>
   );
 }
-

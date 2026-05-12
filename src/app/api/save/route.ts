@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkPassword, issueToken, verifyToken } from '@/lib/auth';
 import { commitFile, deleteFile } from '@/lib/github';
-import { isValidPath } from '@/lib/content';
+import { isValidPath, sectionExists } from '@/lib/content';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,7 +9,8 @@ export const dynamic = 'force-dynamic';
 type Body =
   | { action: 'auth'; password: string }
   | { action: 'save'; token: string; path: string; content: string; message?: string }
-  | { action: 'delete'; token: string; path: string };
+  | { action: 'delete'; token: string; path: string }
+  | { action: 'create-section'; token: string; sectionId: string; label: string; icon?: string; order?: number };
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -62,6 +63,36 @@ export async function POST(req: NextRequest) {
         message: `wiki: delete ${body.path} via MDplus wiki editor`,
       });
       return NextResponse.json({ success: true, commitSha: result.commitSha });
+    }
+
+    if (body.action === 'create-section') {
+      const ok = await verifyToken(body.token);
+      if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+      // Validate section ID (lowercase letters, numbers, hyphens, and slashes for nesting)
+      if (!/^[a-z][a-z0-9-]*(?:\/[a-z][a-z0-9-]*)*$/.test(body.sectionId)) {
+        return NextResponse.json({ error: 'Invalid section ID. Use lowercase letters, numbers, and hyphens.' }, { status: 400 });
+      }
+
+      // Check if section already exists
+      if (sectionExists(body.sectionId)) {
+        return NextResponse.json({ error: 'Section already exists' }, { status: 400 });
+      }
+
+      // Create _section.json file (this creates the folder in git)
+      const sectionMeta = {
+        label: body.label,
+        icon: body.icon || 'folder',
+        order: body.order ?? 999,
+      };
+
+      const filePath = `content/${body.sectionId}/_section.json`;
+      const result = await commitFile({
+        filePath,
+        content: JSON.stringify(sectionMeta, null, 2),
+        message: `wiki: create section "${body.label}" via MDplus wiki editor`,
+      });
+      return NextResponse.json({ success: true, commitSha: result.commitSha, sectionId: body.sectionId });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

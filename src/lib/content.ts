@@ -2,20 +2,134 @@ import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
 
-export type Section = 'overview' | 'operations' | 'communities' | 'admin';
+const CONTENT_DIR = path.join(process.cwd(), 'content');
 
-export const SECTION_ORDER: Section[] = ['overview', 'operations', 'communities', 'admin'];
+// Section metadata can be stored in _section.json in each folder
+export interface SectionMeta {
+  label: string;
+  icon?: string;
+  order?: number;
+}
 
-export const SECTION_LABELS: Record<Section, string> = {
-  overview: 'Overview',
-  operations: 'Operations',
-  communities: 'Communities',
-  admin: 'Admin',
-};
+export interface SectionInfo {
+  id: string; // e.g., "operations" or "operations/meetings"
+  label: string;
+  icon?: string;
+  order: number;
+  depth: number;
+  parent?: string;
+}
+
+// Discover all sections (folders) in the content directory
+export function discoverSections(): SectionInfo[] {
+  const sections: SectionInfo[] = [];
+
+  function scanDir(dir: string, parentId: string = '', depth: number = 0) {
+    if (!fs.existsSync(dir)) return;
+
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
+
+      const sectionId = parentId ? `${parentId}/${entry.name}` : entry.name;
+      const sectionPath = path.join(dir, entry.name);
+
+      // Try to read _section.json for metadata
+      let meta: SectionMeta = { label: formatLabel(entry.name), order: 999 };
+      const metaPath = path.join(sectionPath, '_section.json');
+      if (fs.existsSync(metaPath)) {
+        try {
+          meta = { ...meta, ...JSON.parse(fs.readFileSync(metaPath, 'utf8')) };
+        } catch {
+          // Ignore parse errors
+        }
+      }
+
+      sections.push({
+        id: sectionId,
+        label: meta.label,
+        icon: meta.icon,
+        order: meta.order ?? 999,
+        depth,
+        parent: parentId || undefined,
+      });
+
+      // Recursively scan subdirectories (limit to 2 levels deep for sanity)
+      if (depth < 2) {
+        scanDir(sectionPath, sectionId, depth + 1);
+      }
+    }
+  }
+
+  scanDir(CONTENT_DIR);
+
+  // Sort by order, then alphabetically
+  return sections.sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+// Format folder name to label (e.g., "my-section" -> "My Section")
+function formatLabel(name: string): string {
+  return name
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+// Get all section IDs (for validation)
+export function getAllSectionIds(): string[] {
+  return discoverSections().map((s) => s.id);
+}
+
+// Check if a section exists
+export function sectionExists(sectionId: string): boolean {
+  const sectionPath = path.join(CONTENT_DIR, sectionId);
+  return fs.existsSync(sectionPath) && fs.statSync(sectionPath).isDirectory();
+}
+
+// Create a new section
+export function createSection(sectionId: string, meta: SectionMeta): boolean {
+  const sectionPath = path.join(CONTENT_DIR, sectionId);
+
+  // Validate section ID
+  if (!/^[a-z0-9][a-z0-9-/]*[a-z0-9]$|^[a-z0-9]$/.test(sectionId)) {
+    return false;
+  }
+
+  // Don't allow creating if it already exists
+  if (fs.existsSync(sectionPath)) {
+    return false;
+  }
+
+  // Create the directory
+  fs.mkdirSync(sectionPath, { recursive: true });
+
+  // Write _section.json
+  fs.writeFileSync(
+    path.join(sectionPath, '_section.json'),
+    JSON.stringify(meta, null, 2)
+  );
+
+  return true;
+}
+
+// Get section label by ID
+export function getSectionLabel(sectionId: string): string {
+  const sections = discoverSections();
+  const section = sections.find((s) => s.id === sectionId);
+  return section?.label ?? formatLabel(sectionId.split('/').pop() || sectionId);
+}
+
+// Legacy type alias for backward compatibility
+export type Section = string;
 
 export interface PageFrontmatter {
   title: string;
-  section: Section;
+  section: string;
   icon?: string;
   updatedAt?: string;
   published?: boolean;
@@ -24,20 +138,18 @@ export interface PageFrontmatter {
 
 export interface WikiPage {
   slug: string;
-  section: Section;
+  section: string;
   path: string;
   frontmatter: PageFrontmatter;
   content: string;
   raw: string;
 }
 
-const CONTENT_DIR = path.join(process.cwd(), 'content');
-
 export function getContentRoot(): string {
   return CONTENT_DIR;
 }
 
-function readPageFile(section: Section, slug: string): WikiPage | null {
+function readPageFile(section: string, slug: string): WikiPage | null {
   const filePath = path.join(CONTENT_DIR, section, `${slug}.mdx`);
   if (!fs.existsSync(filePath)) return null;
   const raw = fs.readFileSync(filePath, 'utf8');
@@ -49,7 +161,7 @@ function readPageFile(section: Section, slug: string): WikiPage | null {
     path: `${section}/${slug}`,
     frontmatter: {
       title: fm.title ?? slug,
-      section: (fm.section ?? section) as Section,
+      section: fm.section ?? section,
       icon: fm.icon,
       updatedAt: fm.updatedAt,
       published: fm.published !== false,
@@ -60,25 +172,38 @@ function readPageFile(section: Section, slug: string): WikiPage | null {
   };
 }
 
-export function getPage(section: string, slug: string): WikiPage | null {
-  if (!SECTION_ORDER.includes(section as Section)) return null;
-  return readPageFile(section as Section, slug);
+export function getPage(sectionPath: string, slug: string): WikiPage | null {
+  if (!sectionExists(sectionPath)) return null;
+  return readPageFile(sectionPath, slug);
+}
+
+// Get page by full path (e.g., "operations/meetings/standup")
+export function getPageByPath(pagePath: string): WikiPage | null {
+  const parts = pagePath.split('/');
+  if (parts.length < 2) return null;
+  const slug = parts.pop()!;
+  const section = parts.join('/');
+  return getPage(section, slug);
 }
 
 export function getAllPages(opts: { includeDrafts?: boolean } = {}): WikiPage[] {
   const pages: WikiPage[] = [];
-  for (const section of SECTION_ORDER) {
-    const dir = path.join(CONTENT_DIR, section);
+  const sections = discoverSections();
+
+  for (const section of sections) {
+    const dir = path.join(CONTENT_DIR, section.id);
     if (!fs.existsSync(dir)) continue;
+
     const entries = fs.readdirSync(dir).filter((f) => f.endsWith('.mdx'));
     for (const entry of entries) {
       const slug = entry.replace(/\.mdx$/, '');
-      const page = readPageFile(section, slug);
+      const page = readPageFile(section.id, slug);
       if (!page) continue;
       if (!opts.includeDrafts && page.frontmatter.published === false) continue;
       pages.push(page);
     }
   }
+
   return pages.sort((a, b) => {
     const ao = a.frontmatter.order ?? 999;
     const bo = b.frontmatter.order ?? 999;
@@ -98,33 +223,34 @@ export interface NavPage {
 }
 
 export interface NavGroup {
-  section: Section;
+  section: string;
   label: string;
+  icon?: string;
+  depth: number;
+  parent?: string;
   pages: NavPage[];
 }
 
 // Extract plain text from markdown for search
 function extractPlainText(content: string): string {
   return content
-    // Remove MDX components
     .replace(/<[^>]+>/g, ' ')
-    // Remove markdown links
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    // Remove markdown formatting
     .replace(/[*_#`~]/g, '')
-    // Remove extra whitespace
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 export function getNavTree(opts: { includeDrafts?: boolean; includeContent?: boolean } = {}): NavGroup[] {
   const pages = getAllPages(opts);
-  const grouped: Record<Section, NavPage[]> = {
-    overview: [],
-    operations: [],
-    communities: [],
-    admin: [],
-  };
+  const sections = discoverSections();
+
+  // Group pages by section
+  const grouped: Record<string, NavPage[]> = {};
+  for (const section of sections) {
+    grouped[section.id] = [];
+  }
+
   for (const p of pages) {
     const navPage: NavPage = {
       title: p.frontmatter.title,
@@ -137,17 +263,23 @@ export function getNavTree(opts: { includeDrafts?: boolean; includeContent?: boo
     if (opts.includeContent) {
       navPage.contentPreview = extractPlainText(p.content).slice(0, 500);
     }
-    grouped[p.frontmatter.section].push(navPage);
+    if (grouped[p.section]) {
+      grouped[p.section].push(navPage);
+    }
   }
-  return SECTION_ORDER.map((section) => ({
-    section,
-    label: SECTION_LABELS[section],
-    pages: grouped[section],
+
+  return sections.map((section) => ({
+    section: section.id,
+    label: section.label,
+    icon: section.icon,
+    depth: section.depth,
+    parent: section.parent,
+    pages: grouped[section.id] || [],
   }));
 }
 
-// Get all pages with content for full-text search (legacy - kept for compatibility)
-export function getSearchablePages(): Array<NavPage & { section: Section; sectionLabel: string; searchContent: string }> {
+// Get all pages with content for full-text search
+export function getSearchablePages(): Array<NavPage & { section: string; sectionLabel: string; searchContent: string }> {
   const pages = getAllPages();
   return pages.map((p) => {
     const plainText = extractPlainText(p.content);
@@ -161,7 +293,7 @@ export function getSearchablePages(): Array<NavPage & { section: Section; sectio
       contentPreview: plainText.slice(0, 500),
       searchContent: plainText,
       section: p.frontmatter.section,
-      sectionLabel: SECTION_LABELS[p.frontmatter.section],
+      sectionLabel: getSectionLabel(p.frontmatter.section),
     };
   });
 }
@@ -179,7 +311,7 @@ export interface SearchSection {
   pageTitle: string;
   pagePath: string;
   pageIcon?: string;
-  wikiSection: Section;
+  wikiSection: string;
   sectionLabel: string;
   heading: string;
   headingSlug: string;
@@ -213,7 +345,7 @@ export function getSearchIndex(): SearchSection[] {
           pagePath: page.path,
           pageIcon: page.frontmatter.icon,
           wikiSection: page.frontmatter.section,
-          sectionLabel: SECTION_LABELS[page.frontmatter.section],
+          sectionLabel: getSectionLabel(page.frontmatter.section),
           heading: currentHeading,
           headingSlug: currentSlug,
           headingLevel: currentLevel,
@@ -244,14 +376,13 @@ export function getSearchIndex(): SearchSection[] {
 export function getRecentChanges(limit: number = 10): Array<{
   title: string;
   path: string;
-  section: Section;
+  section: string;
   sectionLabel: string;
   updatedAt: string;
   icon?: string;
 }> {
   const pages = getAllPages();
 
-  // Sort by updatedAt descending
   const sorted = pages
     .filter((p) => p.frontmatter.updatedAt)
     .sort((a, b) => {
@@ -265,7 +396,7 @@ export function getRecentChanges(limit: number = 10): Array<{
     title: p.frontmatter.title,
     path: p.path,
     section: p.frontmatter.section,
-    sectionLabel: SECTION_LABELS[p.frontmatter.section],
+    sectionLabel: getSectionLabel(p.frontmatter.section),
     updatedAt: p.frontmatter.updatedAt || '',
     icon: p.frontmatter.icon,
   }));
@@ -274,11 +405,16 @@ export function getRecentChanges(limit: number = 10): Array<{
 export function isValidPath(p: string): boolean {
   if (!p || typeof p !== 'string') return false;
   if (p.includes('..') || p.startsWith('/') || p.includes('\\')) return false;
+
   const parts = p.split('/');
-  if (parts.length !== 2) return false;
-  const [section, slug] = parts;
-  if (!SECTION_ORDER.includes(section as Section)) return false;
+  if (parts.length < 2) return false;
+
+  const slug = parts.pop()!;
+  const section = parts.join('/');
+
+  if (!sectionExists(section)) return false;
   if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) return false;
+
   return true;
 }
 
