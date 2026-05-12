@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkPassword, issueToken, verifyToken } from '@/lib/auth';
-import { commitFile, deleteFile, getFileContent, listDirectoryFiles } from '@/lib/github';
-import { isValidPath, sectionExists } from '@/lib/content';
+import { commitFile, deleteFile, getFileContent, listDirectoryFiles, batchCommitFiles } from '@/lib/github';
+import { isValidPath, sectionExists, getSectionMeta } from '@/lib/content';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,9 @@ type Body =
   | { action: 'create-section'; token: string; sectionId: string; label: string; icon?: string; order?: number }
   | { action: 'update-section'; token: string; sectionId: string; label?: string; icon?: string; order?: number }
   | { action: 'move-section'; token: string; sectionId: string; newParent: string | null; label: string; icon: string; order: number }
-  | { action: 'update-page-order'; token: string; path: string; order: number };
+  | { action: 'update-page-order'; token: string; path: string; order: number }
+  | { action: 'batch-reorder-pages'; token: string; updates: Array<{ path: string; order: number }> }
+  | { action: 'batch-reorder-sections'; token: string; updates: Array<{ sectionId: string; order: number }> };
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -241,6 +243,106 @@ export async function POST(req: NextRequest) {
         filePath,
         content: newContent,
         message: `wiki: reorder ${body.path} via MDplus wiki editor`,
+      });
+
+      return NextResponse.json({ success: true, commitSha: result.commitSha });
+    }
+
+    if (body.action === 'batch-reorder-pages') {
+      const ok = await verifyToken(body.token);
+      if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+      if (!body.updates || body.updates.length === 0) {
+        return NextResponse.json({ error: 'No updates provided' }, { status: 400 });
+      }
+
+      // Validate all paths
+      for (const update of body.updates) {
+        if (!isValidPath(update.path)) {
+          return NextResponse.json({ error: `Invalid path: ${update.path}` }, { status: 400 });
+        }
+      }
+
+      // Build updated files
+      const filesToCommit: Array<{ path: string; content: string }> = [];
+
+      for (const update of body.updates) {
+        const filePath = `content/${update.path}.mdx`;
+        const content = await getFileContent(filePath);
+        if (!content) continue;
+
+        // Parse and update frontmatter with new order
+        const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+        if (!fmMatch) continue;
+
+        const frontmatterLines = fmMatch[1].split('\n');
+        const bodyContent = fmMatch[2];
+        let orderFound = false;
+
+        const updatedLines = frontmatterLines.map(line => {
+          if (line.startsWith('order:')) {
+            orderFound = true;
+            return `order: ${update.order}`;
+          }
+          return line;
+        });
+
+        if (!orderFound) {
+          updatedLines.push(`order: ${update.order}`);
+        }
+
+        const newContent = `---\n${updatedLines.join('\n')}\n---\n${bodyContent}`;
+        filesToCommit.push({ path: filePath, content: newContent });
+      }
+
+      if (filesToCommit.length === 0) {
+        return NextResponse.json({ error: 'No valid files to update' }, { status: 400 });
+      }
+
+      const result = await batchCommitFiles({
+        files: filesToCommit,
+        message: `wiki: reorder ${filesToCommit.length} pages via MDplus wiki editor`,
+      });
+
+      return NextResponse.json({ success: true, commitSha: result.commitSha });
+    }
+
+    if (body.action === 'batch-reorder-sections') {
+      const ok = await verifyToken(body.token);
+      if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+      if (!body.updates || body.updates.length === 0) {
+        return NextResponse.json({ error: 'No updates provided' }, { status: 400 });
+      }
+
+      // Build updated files
+      const filesToCommit: Array<{ path: string; content: string }> = [];
+
+      for (const update of body.updates) {
+        if (!sectionExists(update.sectionId)) continue;
+
+        // Get current section metadata
+        const currentMeta = getSectionMeta(update.sectionId);
+        const sectionMeta = {
+          label: currentMeta?.label || update.sectionId,
+          icon: currentMeta?.icon || 'folder',
+          order: update.order,
+        };
+
+        const filePath = `content/${update.sectionId}/_section.json`;
+        filesToCommit.push({
+          path: filePath,
+          content: JSON.stringify(sectionMeta, null, 2),
+        });
+      }
+
+      if (filesToCommit.length === 0) {
+        return NextResponse.json({ error: 'No valid sections to update' }, { status: 400 });
+      }
+
+      const result = await batchCommitFiles({
+        files: filesToCommit,
+        message: `wiki: reorder ${filesToCommit.length} sections via MDplus wiki editor`,
       });
 
       return NextResponse.json({ success: true, commitSha: result.commitSha });

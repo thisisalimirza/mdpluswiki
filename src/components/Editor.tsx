@@ -1455,27 +1455,24 @@ export default function Editor({
 
     if (updates.length === 0) return;
 
-    // Save all order changes
+    // Save all order changes in a single batch commit
     try {
       const token = await ensureToken();
       if (!token) return;
 
-      for (const update of updates) {
-        const sec = newSections.find(s => s.id === update.id);
-        if (!sec) continue;
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'batch-reorder-sections',
+          token,
+          updates: updates.map(u => ({ sectionId: u.id, order: u.order })),
+        }),
+      });
 
-        await fetch('/api/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'update-section',
-            token,
-            sectionId: update.id,
-            label: sec.label,
-            icon: sec.icon || 'folder',
-            order: update.order,
-          }),
-        });
+      if (!res.ok) {
+        const json = await res.json();
+        throw new Error(json.error || 'Failed to update order');
       }
 
       // Update local state with new order values
@@ -1534,22 +1531,24 @@ export default function Editor({
       return [...otherPages, ...updatedSectionPages];
     });
 
-    // Save all order changes
+    // Save all order changes in a single batch commit
     try {
       const token = await ensureToken();
       if (!token) return;
 
-      for (const update of updates) {
-        await fetch('/api/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'update-page-order',
-            token,
-            path: update.path,
-            order: update.order,
-          }),
-        });
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'batch-reorder-pages',
+          token,
+          updates,
+        }),
+      });
+
+      if (!res.ok) {
+        const json = await res.json();
+        throw new Error(json.error || 'Failed to update order');
       }
 
       setToast('Page order updated');

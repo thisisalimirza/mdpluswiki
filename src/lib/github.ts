@@ -128,3 +128,115 @@ export async function listDirectoryFiles(dirPath: string): Promise<Array<{ name:
   const json = (await res.json()) as Array<{ name: string; path: string; type: string }>;
   return json.map(f => ({ name: f.name, path: f.path, type: f.type as 'file' | 'dir' }));
 }
+
+// Batch commit multiple file changes in a single commit using Git Data API
+export async function batchCommitFiles(opts: {
+  files: Array<{ path: string; content: string }>;
+  message: string;
+}): Promise<{ commitSha: string }> {
+  const { token, owner, repo, branch } = env();
+  const hdrs = { ...headers(token), 'Content-Type': 'application/json' };
+
+  // 1. Get the current commit SHA for the branch
+  const refRes = await fetch(
+    `${API}/repos/${owner}/${repo}/git/refs/heads/${branch}`,
+    { headers: headers(token), cache: 'no-store' }
+  );
+  if (!refRes.ok) {
+    throw new Error(`Failed to get branch ref: ${refRes.status} ${await refRes.text()}`);
+  }
+  const refJson = (await refRes.json()) as { object: { sha: string } };
+  const currentCommitSha = refJson.object.sha;
+
+  // 2. Get the tree SHA for that commit
+  const commitRes = await fetch(
+    `${API}/repos/${owner}/${repo}/git/commits/${currentCommitSha}`,
+    { headers: headers(token), cache: 'no-store' }
+  );
+  if (!commitRes.ok) {
+    throw new Error(`Failed to get commit: ${commitRes.status} ${await commitRes.text()}`);
+  }
+  const commitJson = (await commitRes.json()) as { tree: { sha: string } };
+  const baseTreeSha = commitJson.tree.sha;
+
+  // 3. Create blobs for each file and build tree entries
+  const treeEntries: Array<{ path: string; mode: string; type: string; sha: string }> = [];
+
+  for (const file of opts.files) {
+    const blobRes = await fetch(
+      `${API}/repos/${owner}/${repo}/git/blobs`,
+      {
+        method: 'POST',
+        headers: hdrs,
+        body: JSON.stringify({
+          content: Buffer.from(file.content, 'utf8').toString('base64'),
+          encoding: 'base64',
+        }),
+      }
+    );
+    if (!blobRes.ok) {
+      throw new Error(`Failed to create blob: ${blobRes.status} ${await blobRes.text()}`);
+    }
+    const blobJson = (await blobRes.json()) as { sha: string };
+    treeEntries.push({
+      path: file.path,
+      mode: '100644',
+      type: 'blob',
+      sha: blobJson.sha,
+    });
+  }
+
+  // 4. Create a new tree with the updated files
+  const treeRes = await fetch(
+    `${API}/repos/${owner}/${repo}/git/trees`,
+    {
+      method: 'POST',
+      headers: hdrs,
+      body: JSON.stringify({
+        base_tree: baseTreeSha,
+        tree: treeEntries,
+      }),
+    }
+  );
+  if (!treeRes.ok) {
+    throw new Error(`Failed to create tree: ${treeRes.status} ${await treeRes.text()}`);
+  }
+  const treeJson = (await treeRes.json()) as { sha: string };
+
+  // 5. Create a new commit pointing to that tree
+  const newCommitRes = await fetch(
+    `${API}/repos/${owner}/${repo}/git/commits`,
+    {
+      method: 'POST',
+      headers: hdrs,
+      body: JSON.stringify({
+        message: opts.message,
+        tree: treeJson.sha,
+        parents: [currentCommitSha],
+        author: { name: 'MDplus Wiki', email: 'wiki@mdplus.community' },
+        committer: { name: 'MDplus Wiki', email: 'wiki@mdplus.community' },
+      }),
+    }
+  );
+  if (!newCommitRes.ok) {
+    throw new Error(`Failed to create commit: ${newCommitRes.status} ${await newCommitRes.text()}`);
+  }
+  const newCommitJson = (await newCommitRes.json()) as { sha: string };
+
+  // 6. Update the branch ref to point to the new commit
+  const updateRefRes = await fetch(
+    `${API}/repos/${owner}/${repo}/git/refs/heads/${branch}`,
+    {
+      method: 'PATCH',
+      headers: hdrs,
+      body: JSON.stringify({
+        sha: newCommitJson.sha,
+      }),
+    }
+  );
+  if (!updateRefRes.ok) {
+    throw new Error(`Failed to update ref: ${updateRefRes.status} ${await updateRefRes.text()}`);
+  }
+
+  return { commitSha: newCommitJson.sha };
+}

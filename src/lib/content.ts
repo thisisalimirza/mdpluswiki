@@ -140,6 +140,18 @@ export function getSectionLabel(sectionId: string): string {
   return section?.label ?? formatLabel(sectionId.split('/').pop() || sectionId);
 }
 
+// Get full section metadata by ID
+export function getSectionMeta(sectionId: string): SectionMeta | null {
+  const sections = discoverSections();
+  const section = sections.find((s) => s.id === sectionId);
+  if (!section) return null;
+  return {
+    label: section.label,
+    icon: section.icon,
+    order: section.order,
+  };
+}
+
 // Legacy type alias for backward compatibility
 export type Section = string;
 
