@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import * as Icons from '@tabler/icons-react';
 import type { NavGroup } from '@/lib/content';
@@ -148,9 +149,13 @@ export default function Sidebar({
     <aside className="hidden md:flex md:w-[240px] md:flex-col border-r border-hairline bg-sidebar h-screen sticky top-0">
       <div className="px-4 pt-5 pb-3">
         <Link href="/overview/home" className="flex items-center gap-2.5 group">
-          <div className="w-7 h-7 rounded-md bg-brand text-white grid place-items-center font-serif text-sm">
-            M
-          </div>
+          <Image
+            src="/logo.png"
+            alt="MDplus"
+            width={28}
+            height={28}
+            className="shrink-0"
+          />
           <div className="leading-tight">
             <div className="font-semibold text-[14px] text-ink">MDplus</div>
             <div className="text-[11px] text-muted">Leadership Wiki</div>
