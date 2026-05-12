@@ -11,6 +11,7 @@ import {
   getStoredToken,
   setStoredToken,
 } from './AuthGate';
+import { PAGE_TEMPLATES, type PageTemplate } from '@/lib/templates';
 
 // Section info from API
 interface SectionInfo {
@@ -555,6 +556,16 @@ export default function Editor({
   const [newSectionParent, setNewSectionParent] = useState('');
   const [creatingSectionLoading, setCreatingSectionLoading] = useState(false);
 
+  // New page/section creation
+  const [createType, setCreateType] = useState<'page' | 'section'>('page');
+  const [selectedTemplate, setSelectedTemplate] = useState<string>('blank');
+  const [slugEditable, setSlugEditable] = useState(false);
+  const [customSlug, setCustomSlug] = useState('');
+
+  // Delete confirmation
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   // Fetch sections on mount
   useEffect(() => {
     async function fetchSections() {
@@ -786,9 +797,9 @@ export default function Editor({
 
   const targetPath = useMemo(() => {
     if (mode.kind === 'edit') return mode.path;
-    const slug = slugify(title || 'untitled');
+    const slug = customSlug || slugify(title || 'untitled');
     return `${section}/${slug}`;
-  }, [mode, title, section]);
+  }, [mode, title, section, customSlug]);
 
   async function ensureToken(): Promise<string | null> {
     let t = getStoredToken();
@@ -871,6 +882,48 @@ export default function Editor({
     setTimeout(() => router.refresh(), 800);
   }
 
+  // Handle delete for current page (edit mode)
+  async function handleDeleteCurrentPage() {
+    if (mode.kind !== 'edit') return;
+    setDeleting(true);
+    setError(null);
+    try {
+      const token = await ensureToken();
+      if (!token) {
+        setDeleting(false);
+        return;
+      }
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', token, path: mode.path }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        if (res.status === 401) clearStoredToken();
+        throw new Error(json.error || 'Delete failed');
+      }
+      // Clear draft
+      localStorage.removeItem(getDraftKey(mode));
+      setToast('Page deleted. Redirecting...');
+      setShowDeleteConfirm(false);
+      setTimeout(() => {
+        router.push('/');
+        onClose();
+      }, 1200);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  // Get icon component helper
+  function getIconComponentForTemplate(name: string) {
+    const key = 'Icon' + name.split('-').map((p: string) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+    return (Icons as unknown as Record<string, React.ComponentType<IconProps>>)[key] || Icons.IconFile;
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 grid place-items-center px-3 py-6">
       <div className="w-full max-w-[1000px] max-h-[92vh] bg-white rounded-card shadow-xl border border-hairline flex flex-col">
@@ -883,7 +936,7 @@ export default function Editor({
               {mode.kind === 'edit'
                 ? 'Edit page'
                 : mode.kind === 'new'
-                ? 'New page'
+                ? (createType === 'page' ? 'New page' : 'New section')
                 : 'Manage pages'}
             </h2>
             {hasUnsavedChanges && mode.kind !== 'manage' && (
@@ -907,6 +960,144 @@ export default function Editor({
               <div className="text-center text-muted py-10">Loading…</div>
             ) : (
               <>
+                {/* Page/Section toggle for new mode */}
+                {mode.kind === 'new' && (
+                  <div className="flex items-center gap-1 bg-sidebar p-1 rounded-md w-fit">
+                    <button
+                      type="button"
+                      onClick={() => setCreateType('page')}
+                      className={`px-4 py-1.5 text-[13px] rounded transition-colors flex items-center gap-1.5 ${
+                        createType === 'page' ? 'bg-white shadow-sm font-medium' : 'text-muted hover:text-ink'
+                      }`}
+                    >
+                      <Icons.IconFile size={14} stroke={1.75} />
+                      New Page
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCreateType('section')}
+                      className={`px-4 py-1.5 text-[13px] rounded transition-colors flex items-center gap-1.5 ${
+                        createType === 'section' ? 'bg-white shadow-sm font-medium' : 'text-muted hover:text-ink'
+                      }`}
+                    >
+                      <Icons.IconFolder size={14} stroke={1.75} />
+                      New Section
+                    </button>
+                  </div>
+                )}
+
+                {/* Section creation form (inline) */}
+                {mode.kind === 'new' && createType === 'section' ? (
+                  <div className="space-y-4 max-w-lg">
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                        Section name
+                      </span>
+                      <input
+                        type="text"
+                        value={newSectionLabel}
+                        onChange={(e) => {
+                          setNewSectionLabel(e.target.value);
+                          setNewSectionId(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''));
+                        }}
+                        placeholder="e.g. Meeting Notes"
+                        className="mt-1 w-full px-3 py-2 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                        Section ID (URL path)
+                      </span>
+                      <input
+                        type="text"
+                        value={newSectionParent ? `${newSectionParent}/${newSectionId}` : newSectionId}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const parts = val.split('/');
+                          if (parts.length > 1) {
+                            setNewSectionParent(parts.slice(0, -1).join('/'));
+                            setNewSectionId(parts[parts.length - 1]);
+                          } else {
+                            setNewSectionParent('');
+                            setNewSectionId(val);
+                          }
+                        }}
+                        placeholder="e.g. meeting-notes or operations/meetings"
+                        className="mt-1 w-full px-3 py-2 border border-hairline rounded-md text-[14px] font-mono focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                      />
+                      <p className="mt-1 text-[11px] text-muted">
+                        Use a slash to create a subsection (e.g., operations/meetings)
+                      </p>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                        Parent section (optional)
+                      </span>
+                      <select
+                        value={newSectionParent}
+                        onChange={(e) => setNewSectionParent(e.target.value)}
+                        className="mt-1 w-full px-3 py-2 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                      >
+                        <option value="">None (top-level section)</option>
+                        {sections.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.depth > 0 ? '└ '.repeat(s.depth) : ''}{s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="block">
+                      <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                        Icon
+                      </span>
+                      <div className="mt-1">
+                        <IconPicker value={newSectionIcon} onChange={setNewSectionIcon} />
+                      </div>
+                    </label>
+
+                    <div className="pt-2 text-[12px] text-muted">
+                      Creates <code className="bg-sidebar px-1 py-0.5 rounded font-mono">content/{newSectionParent ? `${newSectionParent}/${newSectionId}` : newSectionId}/_section.json</code>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                {/* Template picker for new pages */}
+                {mode.kind === 'new' && createType === 'page' && (
+                  <div className="space-y-2">
+                    <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
+                      Choose a template
+                    </span>
+                    <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                      {PAGE_TEMPLATES.map((t) => {
+                        const TemplateIcon = getIconComponentForTemplate(t.icon);
+                        const isSelected = selectedTemplate === t.id;
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedTemplate(t.id);
+                              setBody(t.body);
+                              setIcon(t.defaultIcon);
+                            }}
+                            className={`flex flex-col items-center gap-1.5 p-3 rounded-md border transition-colors ${
+                              isSelected
+                                ? 'border-brand bg-brand-50 text-brand'
+                                : 'border-hairline hover:border-brand-200 hover:bg-brand-50/30'
+                            }`}
+                          >
+                            <TemplateIcon size={20} stroke={1.5} />
+                            <span className="text-[11px] font-medium text-center leading-tight">{t.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   <label className="flex flex-col gap-1 col-span-2">
                     <span className="text-[11px] uppercase tracking-wide text-muted font-semibold">
@@ -955,7 +1146,7 @@ export default function Editor({
                   </label>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 flex-wrap">
                   <label className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -965,8 +1156,40 @@ export default function Editor({
                     />
                     <span className="text-[13px]">Published (shown in nav)</span>
                   </label>
+
+                  {/* Slug preview with edit capability */}
+                  <div className="flex items-center gap-2 text-[12px] text-muted">
+                    <span>Slug:</span>
+                    {mode.kind === 'new' && slugEditable ? (
+                      <input
+                        value={customSlug}
+                        onChange={(e) => setCustomSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, ''))}
+                        className="px-2 py-1 border border-hairline rounded text-[12px] font-mono w-32 focus:outline-none focus:border-brand-300"
+                        placeholder={slugify(title || 'untitled')}
+                      />
+                    ) : (
+                      <code className="bg-sidebar px-1.5 py-0.5 rounded font-mono">{customSlug || slugify(title || 'untitled')}</code>
+                    )}
+                    {mode.kind === 'new' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (slugEditable) {
+                            setSlugEditable(false);
+                          } else {
+                            setSlugEditable(true);
+                            setCustomSlug(customSlug || slugify(title || 'untitled'));
+                          }
+                        }}
+                        className="text-brand hover:underline text-[11px]"
+                      >
+                        {slugEditable ? 'Auto' : 'Edit'}
+                      </button>
+                    )}
+                  </div>
+
                   <div className="text-[12px] text-muted">
-                    Will commit to <code className="bg-sidebar px-1 py-0.5 rounded">content/{targetPath}.mdx</code>
+                    → <code className="bg-sidebar px-1 py-0.5 rounded">content/{targetPath}.mdx</code>
                   </div>
                 </div>
 
@@ -1089,6 +1312,8 @@ Tips:
                     </div>
                   )}
                 </div>
+                </>
+                )}
               </>
             )}
           </div>
@@ -1173,10 +1398,22 @@ Tips:
         )}
 
         <footer className="flex items-center justify-between gap-2 px-5 py-3 border-t border-hairline">
-          <div className="text-[11px] text-muted">
-            {mode.kind !== 'manage'
-              ? 'Saving commits to GitHub. Vercel redeploys automatically.'
-              : 'Page history available in the GitHub repo.'}
+          <div className="flex items-center gap-3">
+            {/* Delete button for edit mode */}
+            {mode.kind === 'edit' && (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] text-red-600 hover:bg-red-50 transition-colors"
+              >
+                <Icons.IconTrash size={14} stroke={1.75} />
+                Delete page
+              </button>
+            )}
+            <div className="text-[11px] text-muted">
+              {mode.kind !== 'manage'
+                ? 'Saving commits to GitHub. Vercel redeploys automatically.'
+                : 'Page history available in the GitHub repo.'}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -1185,13 +1422,83 @@ Tips:
             >
               Close
             </button>
-            {mode.kind !== 'manage' && (
+            {/* Save button for page editing */}
+            {mode.kind !== 'manage' && !(mode.kind === 'new' && createType === 'section') && (
               <button
                 onClick={save}
                 disabled={saving || !title || !body}
                 className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50"
               >
                 {saving ? 'Saving…' : 'Save & commit'}
+              </button>
+            )}
+            {/* Create section button */}
+            {mode.kind === 'new' && createType === 'section' && (
+              <button
+                onClick={async () => {
+                  if (!newSectionLabel || !newSectionId) {
+                    setError('Section name and ID are required');
+                    return;
+                  }
+
+                  const fullSectionId = newSectionParent ? `${newSectionParent}/${newSectionId}` : newSectionId;
+
+                  setCreatingSectionLoading(true);
+                  setError(null);
+
+                  try {
+                    const token = await ensureToken();
+                    if (!token) {
+                      setCreatingSectionLoading(false);
+                      return;
+                    }
+
+                    const res = await fetch('/api/save', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        action: 'create-section',
+                        token,
+                        sectionId: fullSectionId,
+                        label: newSectionLabel,
+                        icon: newSectionIcon,
+                      }),
+                    });
+
+                    const data = await res.json();
+                    if (!res.ok) {
+                      if (res.status === 401) clearStoredToken();
+                      setError(data.error || 'Failed to create section');
+                      return;
+                    }
+
+                    // Add the new section to the list
+                    setSections(prev => [...prev, {
+                      id: fullSectionId,
+                      label: newSectionLabel,
+                      icon: newSectionIcon,
+                      order: 999,
+                      depth: fullSectionId.split('/').length - 1,
+                      parent: newSectionParent || undefined,
+                    }]);
+                    setToast('Section created! It will appear after deployment.');
+                    // Reset form and switch to page creation
+                    setNewSectionId('');
+                    setNewSectionLabel('');
+                    setNewSectionIcon('folder');
+                    setNewSectionParent('');
+                    setSection(fullSectionId);
+                    setCreateType('page');
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to create section');
+                  } finally {
+                    setCreatingSectionLoading(false);
+                  }
+                }}
+                disabled={creatingSectionLoading || !newSectionLabel || !newSectionId}
+                className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50"
+              >
+                {creatingSectionLoading ? 'Creating...' : 'Create section'}
               </button>
             )}
           </div>
@@ -1363,6 +1670,55 @@ Tips:
                 className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50"
               >
                 {creatingSectionLoading ? 'Creating...' : 'Create section'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && mode.kind === 'edit' && (
+        <div className="fixed inset-0 z-[60] bg-black/40 grid place-items-center px-4">
+          <div className="w-full max-w-sm bg-white rounded-lg shadow-xl border border-hairline p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 grid place-items-center">
+                <Icons.IconTrash size={20} stroke={1.75} />
+              </div>
+              <div>
+                <h3 className="font-serif text-[18px]">Delete page?</h3>
+                <p className="text-[13px] text-muted">This action cannot be undone.</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-md p-3 mb-4">
+              <p className="text-[13px] text-red-800">
+                This will permanently delete <code className="bg-red-100 px-1 rounded font-mono">{mode.path}.mdx</code> and commit the deletion to GitHub.
+              </p>
+            </div>
+
+            {error && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-[13px] text-red-700">
+                {error}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setError(null);
+                }}
+                disabled={deleting}
+                className="px-3 py-1.5 rounded-md text-[13px] text-muted hover:bg-black/[0.04]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteCurrentPage}
+                disabled={deleting}
+                className="px-4 py-1.5 rounded-md bg-red-600 text-white text-[13px] font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete page'}
               </button>
             </div>
           </div>
