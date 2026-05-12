@@ -1312,9 +1312,9 @@ Tips:
                   setError(null);
 
                   try {
-                    const token = getStoredToken();
+                    const token = await ensureToken();
                     if (!token) {
-                      setError('Not authenticated');
+                      setCreatingSectionLoading(false);
                       return;
                     }
 
@@ -1332,6 +1332,7 @@ Tips:
 
                     const data = await res.json();
                     if (!res.ok) {
+                      if (res.status === 401) clearStoredToken();
                       setError(data.error || 'Failed to create section');
                       return;
                     }
