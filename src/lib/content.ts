@@ -65,11 +65,27 @@ export function discoverSections(): SectionInfo[] {
 
   scanDir(CONTENT_DIR);
 
-  // Sort by order, then alphabetically
-  return sections.sort((a, b) => {
+  // Sort hierarchically: parents first, then children under their parent
+  // Build a tree and flatten it
+  const topLevel = sections.filter(s => s.depth === 0).sort((a, b) => {
     if (a.order !== b.order) return a.order - b.order;
     return a.label.localeCompare(b.label);
   });
+
+  const result: SectionInfo[] = [];
+  for (const parent of topLevel) {
+    result.push(parent);
+    // Find children of this parent
+    const children = sections
+      .filter(s => s.parent === parent.id)
+      .sort((a, b) => {
+        if (a.order !== b.order) return a.order - b.order;
+        return a.label.localeCompare(b.label);
+      });
+    result.push(...children);
+  }
+
+  return result;
 }
 
 // Format folder name to label (e.g., "my-section" -> "My Section")
