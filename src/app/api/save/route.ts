@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkPassword, issueToken, verifyToken } from '@/lib/auth';
-import { commitFile, deleteFile } from '@/lib/github';
+import { commitFile, deleteFile, getFileContent, listDirectoryFiles } from '@/lib/github';
 import { isValidPath, sectionExists } from '@/lib/content';
 
 export const runtime = 'nodejs';
@@ -11,7 +11,8 @@ type Body =
   | { action: 'save'; token: string; path: string; content: string; message?: string }
   | { action: 'delete'; token: string; path: string }
   | { action: 'create-section'; token: string; sectionId: string; label: string; icon?: string; order?: number }
-  | { action: 'update-section'; token: string; sectionId: string; label?: string; icon?: string; order?: number };
+  | { action: 'update-section'; token: string; sectionId: string; label?: string; icon?: string; order?: number }
+  | { action: 'move-section'; token: string; sectionId: string; newParent: string | null; label: string; icon: string; order: number };
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -118,6 +119,82 @@ export async function POST(req: NextRequest) {
         message: `wiki: update section "${body.sectionId}" via MDplus wiki editor`,
       });
       return NextResponse.json({ success: true, commitSha: result.commitSha });
+    }
+
+    if (body.action === 'move-section') {
+      const ok = await verifyToken(body.token);
+      if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+      // Validate current section exists
+      if (!sectionExists(body.sectionId)) {
+        return NextResponse.json({ error: 'Section does not exist' }, { status: 404 });
+      }
+
+      // Calculate new section ID
+      const sectionName = body.sectionId.split('/').pop()!;
+      const newSectionId = body.newParent ? `${body.newParent}/${sectionName}` : sectionName;
+
+      // Don't do anything if the path isn't changing
+      if (newSectionId === body.sectionId) {
+        return NextResponse.json({ error: 'Section is already at this location' }, { status: 400 });
+      }
+
+      // Check new location doesn't already exist
+      if (sectionExists(newSectionId)) {
+        return NextResponse.json({ error: 'A section already exists at the target location' }, { status: 400 });
+      }
+
+      // If moving under a parent, validate parent exists
+      if (body.newParent && !sectionExists(body.newParent)) {
+        return NextResponse.json({ error: 'Parent section does not exist' }, { status: 400 });
+      }
+
+      // Get all files in the current section
+      const files = await listDirectoryFiles(`content/${body.sectionId}`);
+
+      // Process each file
+      for (const file of files) {
+        const content = await getFileContent(file.path);
+        if (!content) continue;
+
+        const newPath = file.path.replace(`content/${body.sectionId}`, `content/${newSectionId}`);
+
+        // Update frontmatter for MDX files
+        let newContent = content;
+        if (file.name.endsWith('.mdx')) {
+          newContent = content.replace(
+            /^(---\n[\s\S]*?section:\s*)([^\n]+)/m,
+            `$1${newSectionId}`
+          );
+        }
+
+        // Commit to new location
+        await commitFile({
+          filePath: newPath,
+          content: newContent,
+          message: `wiki: move ${file.name} to ${newSectionId}`,
+        });
+
+        // Delete from old location
+        await deleteFile({
+          filePath: file.path,
+          message: `wiki: remove ${file.name} from ${body.sectionId}`,
+        });
+      }
+
+      // Update the _section.json at the new location with the provided metadata
+      const sectionMeta = {
+        label: body.label,
+        icon: body.icon,
+        order: body.order,
+      };
+      await commitFile({
+        filePath: `content/${newSectionId}/_section.json`,
+        content: JSON.stringify(sectionMeta, null, 2),
+        message: `wiki: finalize move of section "${body.label}" to ${newSectionId}`,
+      });
+
+      return NextResponse.json({ success: true, newSectionId });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });

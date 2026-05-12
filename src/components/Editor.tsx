@@ -656,7 +656,7 @@ export default function Editor({
   // Manage mode state
   const [manageTab, setManageTab] = useState<'pages' | 'sections'>('pages');
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
-  const [editingSectionData, setEditingSectionData] = useState<{ label: string; icon: string; order: number } | null>(null);
+  const [editingSectionData, setEditingSectionData] = useState<{ label: string; icon: string; order: number; parent: string } | null>(null);
   const [savingSectionId, setSavingSectionId] = useState<string | null>(null);
 
   // Editor name for tracking who made changes
@@ -1093,7 +1093,7 @@ export default function Editor({
   }
 
   // Save section changes
-  async function saveSection(sectionId: string, data: { label: string; icon: string; order: number }) {
+  async function saveSection(sectionId: string, data: { label: string; icon: string; order: number; parent: string }) {
     setSavingSectionId(sectionId);
     setError(null);
     try {
@@ -1102,30 +1102,68 @@ export default function Editor({
         setSavingSectionId(null);
         return;
       }
-      const res = await fetch('/api/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update-section',
-          token,
-          sectionId,
-          label: data.label,
-          icon: data.icon,
-          order: data.order,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        if (res.status === 401) clearStoredToken();
-        throw new Error(json.error || 'Update failed');
+
+      // Find current section to check if parent changed
+      const currentSection = sections.find(s => s.id === sectionId);
+      const currentParent = currentSection?.parent || '';
+      const newParent = data.parent;
+      const parentChanged = currentParent !== newParent;
+
+      if (parentChanged) {
+        // Moving section - this is a more complex operation
+        const res = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'move-section',
+            token,
+            sectionId,
+            newParent: newParent || null, // null means top-level
+            label: data.label,
+            icon: data.icon,
+            order: data.order,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          if (res.status === 401) clearStoredToken();
+          throw new Error(json.error || 'Move failed');
+        }
+        // Refresh sections from server after move
+        const sectionsRes = await fetch('/api/sections');
+        const sectionsJson = await sectionsRes.json();
+        if (sectionsJson.sections) {
+          setSections(sectionsJson.sections);
+        }
+        setToast(`Moved section "${data.label}" successfully`);
+      } else {
+        // Just updating metadata
+        const res = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update-section',
+            token,
+            sectionId,
+            label: data.label,
+            icon: data.icon,
+            order: data.order,
+          }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          if (res.status === 401) clearStoredToken();
+          throw new Error(json.error || 'Update failed');
+        }
+        // Update local sections state
+        setSections(prev => prev.map(s =>
+          s.id === sectionId ? { ...s, label: data.label, icon: data.icon, order: data.order } : s
+        ));
+        setToast(`Updated section "${data.label}"`);
       }
-      // Update local sections state
-      setSections(prev => prev.map(s =>
-        s.id === sectionId ? { ...s, label: data.label, icon: data.icon, order: data.order } : s
-      ));
+
       setEditingSectionId(null);
       setEditingSectionData(null);
-      setToast(`Updated section "${data.label}"`);
       setTimeout(() => router.refresh(), 800);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Update failed');
@@ -2049,20 +2087,36 @@ Tips:
 
                       return (
                         <tr key={s.id} className="border-t border-hairline">
-                          <td className="py-2.5 pr-3" style={{ paddingLeft: s.depth * 20 }}>
+                          <td className="py-2.5 pr-3" style={{ paddingLeft: isEditing ? 0 : s.depth * 20 }}>
                             <span className="flex items-center gap-2">
                               <IconComponent size={14} stroke={1.75} className="text-muted shrink-0" />
                               {isEditing ? (
-                                <input
-                                  type="text"
-                                  value={editingSectionData?.label ?? s.label}
-                                  onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, label: e.target.value } : null)}
-                                  className="flex-1 px-2 py-1 text-[13px] border border-hairline rounded"
-                                />
+                                <>
+                                  <input
+                                    type="text"
+                                    value={editingSectionData?.label ?? s.label}
+                                    onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, label: e.target.value } : null)}
+                                    className="flex-1 px-2 py-1 text-[13px] border border-hairline rounded"
+                                  />
+                                  <select
+                                    value={editingSectionData?.parent ?? ''}
+                                    onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, parent: e.target.value } : null)}
+                                    className="px-2 py-1 text-[12px] border border-hairline rounded bg-white"
+                                  >
+                                    <option value="">Top level</option>
+                                    {sections
+                                      .filter(sec => sec.depth === 0 && sec.id !== s.id && !sec.id.startsWith(s.id + '/'))
+                                      .map(sec => (
+                                        <option key={sec.id} value={sec.id}>
+                                          Under: {sec.label}
+                                        </option>
+                                      ))}
+                                  </select>
+                                </>
                               ) : (
                                 <span className="font-medium">{s.label}</span>
                               )}
-                              {s.parent && (
+                              {!isEditing && s.parent && (
                                 <span className="text-[10px] text-muted bg-sidebar px-1.5 py-0.5 rounded">
                                   nested
                                 </span>
@@ -2118,7 +2172,7 @@ Tips:
                               <button
                                 onClick={() => {
                                   setEditingSectionId(s.id);
-                                  setEditingSectionData({ label: s.label, icon: s.icon || 'folder', order: s.order });
+                                  setEditingSectionData({ label: s.label, icon: s.icon || 'folder', order: s.order, parent: s.parent || '' });
                                 }}
                                 className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
                               >

@@ -101,3 +101,30 @@ export async function deleteFile(opts: {
   const json = (await res.json()) as { commit: { sha: string } };
   return { commitSha: json.commit.sha };
 }
+
+export async function getFileContent(filePath: string): Promise<string | null> {
+  const { token, owner, repo, branch } = env();
+  const url = `${API}/repos/${owner}/${repo}/contents/${encodeURIComponent(filePath)}?ref=${branch}`;
+  const res = await fetch(url, { headers: headers(token), cache: 'no-store' });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`GitHub getFile failed: ${res.status} ${await res.text()}`);
+  }
+  const json = (await res.json()) as { content: string; encoding: string };
+  if (json.encoding === 'base64') {
+    return Buffer.from(json.content, 'base64').toString('utf8');
+  }
+  return json.content;
+}
+
+export async function listDirectoryFiles(dirPath: string): Promise<Array<{ name: string; path: string; type: 'file' | 'dir' }>> {
+  const { token, owner, repo, branch } = env();
+  const url = `${API}/repos/${owner}/${repo}/contents/${encodeURIComponent(dirPath)}?ref=${branch}`;
+  const res = await fetch(url, { headers: headers(token), cache: 'no-store' });
+  if (res.status === 404) return [];
+  if (!res.ok) {
+    throw new Error(`GitHub listDir failed: ${res.status} ${await res.text()}`);
+  }
+  const json = (await res.json()) as Array<{ name: string; path: string; type: string }>;
+  return json.map(f => ({ name: f.name, path: f.path, type: f.type as 'file' | 'dir' }));
+}
