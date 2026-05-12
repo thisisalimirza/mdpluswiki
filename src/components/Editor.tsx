@@ -88,6 +88,7 @@ function todayHuman(): string {
 interface EditHistoryEntry {
   name: string;
   date: string;
+  summary?: string;
 }
 
 function buildFrontmatter(opts: {
@@ -118,6 +119,9 @@ function buildFrontmatter(opts: {
     for (const entry of recentHistory) {
       lines.push(`  - name: "${entry.name}"`);
       lines.push(`    date: "${entry.date}"`);
+      if (entry.summary) {
+        lines.push(`    summary: "${entry.summary.replace(/"/g, '\\"')}"`);
+      }
     }
   }
 
@@ -148,15 +152,19 @@ function parseFrontmatter(raw: string): {
         const nameLine = lines[i];
         const nameMatch = nameLine.match(/^\s+-\s*name:\s*"?([^"]*)"?\s*$/);
         if (nameMatch) {
-          const name = nameMatch[1];
+          const entry: EditHistoryEntry = { name: nameMatch[1], date: '' };
           i++;
-          if (i < lines.length) {
-            const dateLine = lines[i];
-            const dateMatch = dateLine.match(/^\s+date:\s*"?([^"]*)"?\s*$/);
-            if (dateMatch) {
-              editHistory.push({ name, date: dateMatch[1] });
-            }
+          // Parse date and optional summary
+          while (i < lines.length && lines[i].startsWith('    ') && !lines[i].includes('- name:')) {
+            const fieldLine = lines[i];
+            const dateMatch = fieldLine.match(/^\s+date:\s*"?([^"]*)"?\s*$/);
+            const summaryMatch = fieldLine.match(/^\s+summary:\s*"?([^"]*)"?\s*$/);
+            if (dateMatch) entry.date = dateMatch[1];
+            if (summaryMatch) entry.summary = summaryMatch[1];
+            i++;
           }
+          if (entry.date) editHistory.push(entry);
+          continue;
         }
         i++;
       }
@@ -654,7 +662,8 @@ export default function Editor({
   // Editor name for tracking who made changes
   const [editorName, setEditorNameState] = useState<string>('');
   const [showNamePrompt, setShowNamePrompt] = useState(false);
-  const [existingHistory, setExistingHistory] = useState<Array<{ name: string; date: string }>>([]);
+  const [existingHistory, setExistingHistory] = useState<Array<{ name: string; date: string; summary?: string }>>([]);
+  const [editSummary, setEditSummary] = useState<string>('');
 
   // Load editor name from localStorage on mount
   useEffect(() => {
@@ -978,6 +987,7 @@ export default function Editor({
       const newHistoryEntry: EditHistoryEntry = {
         name: editorName.trim(),
         date: todayHuman(),
+        summary: editSummary.trim() || undefined,
       };
       const newHistory = [newHistoryEntry, ...existingHistory].slice(0, 10);
 
@@ -1005,6 +1015,7 @@ export default function Editor({
 
       // Update existing history for subsequent saves
       setExistingHistory(newHistory);
+      setEditSummary('');
 
       // Clear draft on successful save
       localStorage.removeItem(getDraftKey(mode));
@@ -2182,6 +2193,16 @@ Tips:
                 <Icons.IconUpload size={14} stroke={1.75} />
                 {importLoading ? 'Importing...' : `Import ${importFiles.filter(f => f.status === 'pending').length} pages`}
               </button>
+            )}
+            {/* Edit summary input for page editing */}
+            {mode.kind !== 'manage' && mode.kind !== 'import' && !(mode.kind === 'new' && createType === 'section') && (
+              <input
+                type="text"
+                value={editSummary}
+                onChange={(e) => setEditSummary(e.target.value)}
+                placeholder="Brief summary of changes (optional)"
+                className="w-48 px-2 py-1.5 text-[12px] border border-hairline rounded-md focus:outline-none focus:border-brand-300"
+              />
             )}
             {/* Save button for page editing */}
             {mode.kind !== 'manage' && mode.kind !== 'import' && !(mode.kind === 'new' && createType === 'section') && (

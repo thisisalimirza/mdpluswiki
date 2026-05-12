@@ -82,7 +82,7 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ path
 
       <h1 className="font-serif text-[36px] leading-[1.15] mb-2">{page.frontmatter.title}</h1>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted mb-7 pb-5 border-b border-hairline">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted">
         {page.frontmatter.updatedAt && (
           <span>
             Last updated {page.frontmatter.updatedAt}
@@ -102,6 +102,10 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ path
         )}
       </div>
 
+      <EditHistory history={page.frontmatter.editHistory} />
+
+      <div className="mb-7 pb-5 border-b border-hairline" />
+
       <article className="prose">
         <MDXRemote
           source={page.content}
@@ -114,8 +118,6 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ path
           }}
         />
       </article>
-
-      <EditHistory history={page.frontmatter.editHistory} />
 
       <PageFooter section={page.frontmatter.section} slug={slug} />
     </WikiShell>

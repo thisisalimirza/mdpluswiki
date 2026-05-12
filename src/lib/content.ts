@@ -146,6 +146,7 @@ export type Section = string;
 export interface EditHistoryEntry {
   name: string;
   date: string;
+  summary?: string;
 }
 
 export interface PageFrontmatter {
