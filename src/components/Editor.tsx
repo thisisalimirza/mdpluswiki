@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -587,6 +587,12 @@ export default function Editor({
   const [importLoading, setImportLoading] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
 
+  // Manage mode state
+  const [manageTab, setManageTab] = useState<'pages' | 'sections'>('pages');
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+  const [editingSectionData, setEditingSectionData] = useState<{ label: string; icon: string; order: number } | null>(null);
+  const [savingSectionId, setSavingSectionId] = useState<string | null>(null);
+
   // Fetch sections on mount
   useEffect(() => {
     async function fetchSections() {
@@ -822,6 +828,42 @@ export default function Editor({
     return `${section}/${slug}`;
   }, [mode, title, section, customSlug]);
 
+  // Group and sort pages by section for Manage view
+  const groupedPages = useMemo(() => {
+    // Create a map of section ID -> section info for quick lookup
+    const sectionMap = new Map(sections.map(s => [s.id, s]));
+
+    // Group pages by section
+    const grouped: Record<string, typeof pages> = {};
+    for (const page of pages) {
+      if (!grouped[page.section]) {
+        grouped[page.section] = [];
+      }
+      grouped[page.section].push(page);
+    }
+
+    // Sort pages within each group by title
+    for (const sectionId of Object.keys(grouped)) {
+      grouped[sectionId].sort((a, b) => a.title.localeCompare(b.title));
+    }
+
+    // Get ordered section IDs based on sections array (which is already hierarchically sorted)
+    const orderedSectionIds = sections.map(s => s.id).filter(id => grouped[id]);
+
+    // Add any sections that have pages but aren't in the sections list (edge case)
+    for (const sectionId of Object.keys(grouped)) {
+      if (!orderedSectionIds.includes(sectionId)) {
+        orderedSectionIds.push(sectionId);
+      }
+    }
+
+    return orderedSectionIds.map(sectionId => ({
+      sectionId,
+      sectionInfo: sectionMap.get(sectionId),
+      pages: grouped[sectionId],
+    }));
+  }, [pages, sections]);
+
   async function ensureToken(): Promise<string | null> {
     let t = getStoredToken();
     if (t) return t;
@@ -936,6 +978,48 @@ export default function Editor({
       setError(e instanceof Error ? e.message : 'Delete failed');
     } finally {
       setDeleting(false);
+    }
+  }
+
+  // Save section changes
+  async function saveSection(sectionId: string, data: { label: string; icon: string; order: number }) {
+    setSavingSectionId(sectionId);
+    setError(null);
+    try {
+      const token = await ensureToken();
+      if (!token) {
+        setSavingSectionId(null);
+        return;
+      }
+      const res = await fetch('/api/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update-section',
+          token,
+          sectionId,
+          label: data.label,
+          icon: data.icon,
+          order: data.order,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        if (res.status === 401) clearStoredToken();
+        throw new Error(json.error || 'Update failed');
+      }
+      // Update local sections state
+      setSections(prev => prev.map(s =>
+        s.id === sectionId ? { ...s, label: data.label, icon: data.icon, order: data.order } : s
+      ));
+      setEditingSectionId(null);
+      setEditingSectionData(null);
+      setToast(`Updated section "${data.label}"`);
+      setTimeout(() => router.refresh(), 800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Update failed');
+    } finally {
+      setSavingSectionId(null);
     }
   }
 
@@ -1643,69 +1727,250 @@ Tips:
             )}
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto p-5">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="text-left text-muted text-[11px] uppercase tracking-wide">
-                  <th className="py-2 font-semibold">Title</th>
-                  <th className="py-2 font-semibold">Path</th>
-                  <th className="py-2 font-semibold">Status</th>
-                  <th className="py-2 font-semibold text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pages.map((p) => (
-                  <tr key={p.path} className="border-t border-hairline">
-                    <td className="py-2.5 pr-3 font-medium">{p.title}</td>
-                    <td className="py-2.5 pr-3 text-muted font-mono text-[12px]">
-                      {p.path}.mdx
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      {p.published === false ? (
-                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-sidebar border border-hairline text-muted">
-                          Draft
-                        </span>
-                      ) : (
-                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-brand-50 text-brand-700">
-                          Published
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 text-right">
-                      <button
-                        onClick={() => {
-                          onClose();
-                          router.push(`/${p.path}`);
-                          setTimeout(() => {
-                            window.dispatchEvent(
-                              new CustomEvent('open-editor', {
-                                detail: { kind: 'edit', path: p.path },
-                              })
-                            );
-                          }, 100);
-                        }}
-                        className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => remove(p.path)}
-                        className="px-2 py-1 text-[12px] rounded hover:bg-red-50 text-red-600"
-                      >
-                        Delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {pages.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="py-6 text-center text-muted">
-                      No pages yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <div className="flex-1 overflow-hidden flex flex-col">
+            {/* Tab buttons for Pages/Sections */}
+            <div className="flex gap-1 px-5 pt-4 pb-2 border-b border-hairline">
+              <button
+                onClick={() => setManageTab('pages')}
+                className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                  manageTab === 'pages'
+                    ? 'bg-brand text-white'
+                    : 'text-muted hover:bg-black/[0.04]'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <Icons.IconFile size={14} stroke={1.75} />
+                  Pages
+                </span>
+              </button>
+              <button
+                onClick={() => setManageTab('sections')}
+                className={`px-3 py-1.5 text-[13px] font-medium rounded-md transition-colors ${
+                  manageTab === 'sections'
+                    ? 'bg-brand text-white'
+                    : 'text-muted hover:bg-black/[0.04]'
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  <Icons.IconFolder size={14} stroke={1.75} />
+                  Sections
+                </span>
+              </button>
+            </div>
+
+            {/* Pages tab content */}
+            {manageTab === 'pages' && (
+              <div className="flex-1 overflow-y-auto p-5">
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-muted text-[11px] uppercase tracking-wide">
+                      <th className="py-2 font-semibold">Title</th>
+                      <th className="py-2 font-semibold">Path</th>
+                      <th className="py-2 font-semibold">Status</th>
+                      <th className="py-2 font-semibold text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupedPages.map((group) => {
+                      const sectionLabel = group.sectionInfo?.label || group.sectionId.split('/').pop() || group.sectionId;
+                      const depth = group.sectionInfo?.depth ?? 0;
+                      const IconComponent = group.sectionInfo?.icon
+                        ? getIconComponent(group.sectionInfo.icon)
+                        : Icons.IconFolder;
+
+                      return (
+                        <React.Fragment key={group.sectionId}>
+                          {/* Section header row */}
+                          <tr className="bg-sidebar/50">
+                            <td
+                              colSpan={4}
+                              className="py-2.5 px-2 font-semibold text-[12px]"
+                              style={{ paddingLeft: 8 + depth * 16 }}
+                            >
+                              <span className="flex items-center gap-2">
+                                {IconComponent && <IconComponent size={14} stroke={1.75} className="text-muted" />}
+                                {sectionLabel}
+                                <span className="text-muted font-normal">
+                                  ({group.pages.length} {group.pages.length === 1 ? 'page' : 'pages'})
+                                </span>
+                              </span>
+                            </td>
+                          </tr>
+                          {/* Pages in this section */}
+                          {group.pages.map((p) => (
+                            <tr key={p.path} className="border-t border-hairline">
+                              <td className="py-2.5 pr-3 font-medium" style={{ paddingLeft: 8 + depth * 16 }}>
+                                {p.title}
+                              </td>
+                              <td className="py-2.5 pr-3 text-muted font-mono text-[12px]">
+                                {p.path}.mdx
+                              </td>
+                              <td className="py-2.5 pr-3">
+                                {p.published === false ? (
+                                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-sidebar border border-hairline text-muted">
+                                    Draft
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-brand-50 text-brand-700">
+                                    Published
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 text-right">
+                                <button
+                                  onClick={() => {
+                                    onClose();
+                                    router.push(`/${p.path}`);
+                                    setTimeout(() => {
+                                      window.dispatchEvent(
+                                        new CustomEvent('open-editor', {
+                                          detail: { kind: 'edit', path: p.path },
+                                        })
+                                      );
+                                    }, 100);
+                                  }}
+                                  className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => remove(p.path)}
+                                  className="px-2 py-1 text-[12px] rounded hover:bg-red-50 text-red-600"
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      );
+                    })}
+                    {pages.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-6 text-center text-muted">
+                          No pages yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Sections tab content */}
+            {manageTab === 'sections' && (
+              <div className="flex-1 overflow-y-auto p-5">
+                <p className="text-[12px] text-muted mb-4">
+                  Edit section order to control sidebar display. Lower order values appear first.
+                  Each change commits to GitHub.
+                </p>
+                <table className="w-full text-[13px]">
+                  <thead>
+                    <tr className="text-left text-muted text-[11px] uppercase tracking-wide">
+                      <th className="py-2 font-semibold">Section</th>
+                      <th className="py-2 font-semibold w-20">Order</th>
+                      <th className="py-2 font-semibold w-28">Icon</th>
+                      <th className="py-2 font-semibold text-right w-32">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sections.map((s) => {
+                      const isEditing = editingSectionId === s.id;
+                      const IconComponent = s.icon ? getIconComponent(s.icon) : Icons.IconFolder;
+
+                      return (
+                        <tr key={s.id} className="border-t border-hairline">
+                          <td className="py-2.5 pr-3" style={{ paddingLeft: s.depth * 20 }}>
+                            <span className="flex items-center gap-2">
+                              <IconComponent size={14} stroke={1.75} className="text-muted shrink-0" />
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  value={editingSectionData?.label ?? s.label}
+                                  onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, label: e.target.value } : null)}
+                                  className="flex-1 px-2 py-1 text-[13px] border border-hairline rounded"
+                                />
+                              ) : (
+                                <span className="font-medium">{s.label}</span>
+                              )}
+                              {s.parent && (
+                                <span className="text-[10px] text-muted bg-sidebar px-1.5 py-0.5 rounded">
+                                  nested
+                                </span>
+                              )}
+                            </span>
+                          </td>
+                          <td className="py-2.5 pr-3">
+                            {isEditing ? (
+                              <input
+                                type="number"
+                                value={editingSectionData?.order ?? s.order}
+                                onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, order: parseInt(e.target.value) || 0 } : null)}
+                                className="w-16 px-2 py-1 text-[13px] border border-hairline rounded text-center"
+                              />
+                            ) : (
+                              <span className="text-muted">{s.order}</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 pr-3">
+                            {isEditing ? (
+                              <input
+                                type="text"
+                                value={editingSectionData?.icon ?? s.icon ?? 'folder'}
+                                onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, icon: e.target.value } : null)}
+                                className="w-24 px-2 py-1 text-[13px] border border-hairline rounded"
+                                placeholder="folder"
+                              />
+                            ) : (
+                              <span className="text-muted font-mono text-[11px]">{s.icon || 'folder'}</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {isEditing ? (
+                              <span className="flex items-center justify-end gap-1">
+                                <button
+                                  onClick={() => {
+                                    setEditingSectionId(null);
+                                    setEditingSectionData(null);
+                                  }}
+                                  className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-muted"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  onClick={() => editingSectionData && saveSection(s.id, editingSectionData)}
+                                  disabled={savingSectionId === s.id}
+                                  className="px-2 py-1 text-[12px] rounded bg-brand text-white hover:bg-brand-600 disabled:opacity-50"
+                                >
+                                  {savingSectionId === s.id ? 'Saving...' : 'Save'}
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setEditingSectionId(s.id);
+                                  setEditingSectionData({ label: s.label, icon: s.icon || 'folder', order: s.order });
+                                }}
+                                className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
+                              >
+                                Edit
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {sections.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-6 text-center text-muted">
+                          No sections yet.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 

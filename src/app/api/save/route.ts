@@ -10,7 +10,8 @@ type Body =
   | { action: 'auth'; password: string }
   | { action: 'save'; token: string; path: string; content: string; message?: string }
   | { action: 'delete'; token: string; path: string }
-  | { action: 'create-section'; token: string; sectionId: string; label: string; icon?: string; order?: number };
+  | { action: 'create-section'; token: string; sectionId: string; label: string; icon?: string; order?: number }
+  | { action: 'update-section'; token: string; sectionId: string; label?: string; icon?: string; order?: number };
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -93,6 +94,30 @@ export async function POST(req: NextRequest) {
         message: `wiki: create section "${body.label}" via MDplus wiki editor`,
       });
       return NextResponse.json({ success: true, commitSha: result.commitSha, sectionId: body.sectionId });
+    }
+
+    if (body.action === 'update-section') {
+      const ok = await verifyToken(body.token);
+      if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+      // Check if section exists
+      if (!sectionExists(body.sectionId)) {
+        return NextResponse.json({ error: 'Section does not exist' }, { status: 404 });
+      }
+
+      // Build updated metadata
+      const sectionMeta: { label?: string; icon?: string; order?: number } = {};
+      if (body.label !== undefined) sectionMeta.label = body.label;
+      if (body.icon !== undefined) sectionMeta.icon = body.icon;
+      if (body.order !== undefined) sectionMeta.order = body.order;
+
+      const filePath = `content/${body.sectionId}/_section.json`;
+      const result = await commitFile({
+        filePath,
+        content: JSON.stringify(sectionMeta, null, 2),
+        message: `wiki: update section "${body.sectionId}" via MDplus wiki editor`,
+      });
+      return NextResponse.json({ success: true, commitSha: result.commitSha });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
