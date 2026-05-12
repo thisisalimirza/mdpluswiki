@@ -4,6 +4,7 @@ import { useState } from 'react';
 import * as Icons from '@tabler/icons-react';
 
 const STORAGE_KEY = 'mdplus_wiki_token';
+const NAME_STORAGE_KEY = 'mdplus_wiki_editor_name';
 
 export function getStoredToken(): string | null {
   if (typeof window === 'undefined') return null;
@@ -16,6 +17,19 @@ export function setStoredToken(token: string) {
 
 export function clearStoredToken() {
   sessionStorage.removeItem(STORAGE_KEY);
+}
+
+export function getEditorName(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem(NAME_STORAGE_KEY);
+}
+
+export function setEditorName(name: string) {
+  localStorage.setItem(NAME_STORAGE_KEY, name);
+}
+
+export function clearEditorName() {
+  localStorage.removeItem(NAME_STORAGE_KEY);
 }
 
 export default function AuthGate({

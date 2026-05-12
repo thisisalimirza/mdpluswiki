@@ -143,11 +143,18 @@ export function getSectionLabel(sectionId: string): string {
 // Legacy type alias for backward compatibility
 export type Section = string;
 
+export interface EditHistoryEntry {
+  name: string;
+  date: string;
+}
+
 export interface PageFrontmatter {
   title: string;
   section: string;
   icon?: string;
   updatedAt?: string;
+  updatedBy?: string;
+  editHistory?: EditHistoryEntry[];
   published?: boolean;
   order?: number;
 }
@@ -180,6 +187,8 @@ function readPageFile(section: string, slug: string): WikiPage | null {
       section: fm.section ?? section,
       icon: fm.icon,
       updatedAt: fm.updatedAt,
+      updatedBy: fm.updatedBy,
+      editHistory: fm.editHistory,
       published: fm.published !== false,
       order: fm.order,
     },

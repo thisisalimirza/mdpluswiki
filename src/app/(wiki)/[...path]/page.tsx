@@ -8,6 +8,7 @@ import { extractToc } from '@/lib/toc';
 import { mdxComponents } from '@/components/MdxComponents';
 import WikiShell from '@/components/WikiShell';
 import SearchHighlight from '@/components/SearchHighlight';
+import EditHistory from '@/components/EditHistory';
 
 export const dynamic = 'force-static';
 export const dynamicParams = true;
@@ -83,7 +84,12 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ path
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted mb-7 pb-5 border-b border-hairline">
         {page.frontmatter.updatedAt && (
-          <span>Last updated {page.frontmatter.updatedAt}</span>
+          <span>
+            Last updated {page.frontmatter.updatedAt}
+            {page.frontmatter.updatedBy && (
+              <> by <strong className="font-medium text-ink">{page.frontmatter.updatedBy}</strong></>
+            )}
+          </span>
         )}
         <span className="hidden sm:inline">·</span>
         <span>
@@ -108,6 +114,8 @@ export default async function WikiPageRoute({ params }: { params: Promise<{ path
           }}
         />
       </article>
+
+      <EditHistory history={page.frontmatter.editHistory} />
 
       <PageFooter section={page.frontmatter.section} slug={slug} />
     </WikiShell>

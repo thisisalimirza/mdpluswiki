@@ -10,6 +10,8 @@ import {
   clearStoredToken,
   getStoredToken,
   setStoredToken,
+  getEditorName,
+  setEditorName,
 } from './AuthGate';
 import { PAGE_TEMPLATES, type PageTemplate } from '@/lib/templates';
 
@@ -83,34 +85,89 @@ function todayHuman(): string {
   });
 }
 
+interface EditHistoryEntry {
+  name: string;
+  date: string;
+}
+
 function buildFrontmatter(opts: {
   title: string;
   section: string;
   icon: string;
   published: boolean;
+  updatedBy?: string;
+  editHistory?: EditHistoryEntry[];
 }): string {
-  return [
+  const lines = [
     '---',
     `title: "${opts.title.replace(/"/g, '\\"')}"`,
     `section: ${opts.section}`,
     `icon: ${opts.icon || 'file'}`,
     `updatedAt: "${todayHuman()}"`,
     `published: ${opts.published}`,
-    '---',
-    '',
-  ].join('\n');
+  ];
+
+  if (opts.updatedBy) {
+    lines.push(`updatedBy: "${opts.updatedBy}"`);
+  }
+
+  if (opts.editHistory && opts.editHistory.length > 0) {
+    lines.push('editHistory:');
+    // Keep only last 10 entries
+    const recentHistory = opts.editHistory.slice(0, 10);
+    for (const entry of recentHistory) {
+      lines.push(`  - name: "${entry.name}"`);
+      lines.push(`    date: "${entry.date}"`);
+    }
+  }
+
+  lines.push('---', '');
+  return lines.join('\n');
 }
 
 function parseFrontmatter(raw: string): {
   fm: Record<string, string | boolean>;
   body: string;
+  editHistory: EditHistoryEntry[];
 } {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!m) return { fm: {}, body: raw };
+  if (!m) return { fm: {}, body: raw, editHistory: [] };
   const fm: Record<string, string | boolean> = {};
-  for (const line of m[1].split('\n')) {
+  const editHistory: EditHistoryEntry[] = [];
+
+  const lines = m[1].split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Check for editHistory array
+    if (line.trim() === 'editHistory:') {
+      i++;
+      // Parse array entries
+      while (i < lines.length && lines[i].startsWith('  ')) {
+        const nameLine = lines[i];
+        const nameMatch = nameLine.match(/^\s+-\s*name:\s*"?([^"]*)"?\s*$/);
+        if (nameMatch) {
+          const name = nameMatch[1];
+          i++;
+          if (i < lines.length) {
+            const dateLine = lines[i];
+            const dateMatch = dateLine.match(/^\s+date:\s*"?([^"]*)"?\s*$/);
+            if (dateMatch) {
+              editHistory.push({ name, date: dateMatch[1] });
+            }
+          }
+        }
+        i++;
+      }
+      continue;
+    }
+
     const idx = line.indexOf(':');
-    if (idx === -1) continue;
+    if (idx === -1) {
+      i++;
+      continue;
+    }
     const key = line.slice(0, idx).trim();
     let val: string | boolean = line.slice(idx + 1).trim();
     if (typeof val === 'string') {
@@ -119,8 +176,9 @@ function parseFrontmatter(raw: string): {
       else if (val === 'false') val = false;
     }
     fm[key] = val;
+    i++;
   }
-  return { fm, body: m[2] };
+  return { fm, body: m[2], editHistory };
 }
 
 // Get draft key for localStorage
@@ -593,6 +651,21 @@ export default function Editor({
   const [editingSectionData, setEditingSectionData] = useState<{ label: string; icon: string; order: number } | null>(null);
   const [savingSectionId, setSavingSectionId] = useState<string | null>(null);
 
+  // Editor name for tracking who made changes
+  const [editorName, setEditorNameState] = useState<string>('');
+  const [showNamePrompt, setShowNamePrompt] = useState(false);
+  const [existingHistory, setExistingHistory] = useState<Array<{ name: string; date: string }>>([]);
+
+  // Load editor name from localStorage on mount
+  useEffect(() => {
+    const storedName = getEditorName();
+    if (storedName) {
+      setEditorNameState(storedName);
+    } else {
+      setShowNamePrompt(true);
+    }
+  }, []);
+
   // Fetch sections on mount
   useEffect(() => {
     async function fetchSections() {
@@ -794,7 +867,7 @@ export default function Editor({
         const res = await fetch(`/api/raw?path=${encodeURIComponent(mode.path)}`);
         if (!res.ok) throw new Error('Could not load page');
         const json = await res.json();
-        const { fm, body } = parseFrontmatter(json.raw);
+        const { fm, body, editHistory } = parseFrontmatter(json.raw);
         const loadedTitle = String(fm.title ?? '');
         const loadedBody = body.replace(/^\n+/, '');
         const loadedIcon = String(fm.icon ?? 'file');
@@ -805,6 +878,7 @@ export default function Editor({
         setPublished(fm.published !== false);
         setBody(loadedBody);
         setInitialValues({ title: loadedTitle, body: loadedBody, icon: loadedIcon });
+        setExistingHistory(editHistory);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load');
       } finally {
@@ -884,6 +958,13 @@ export default function Editor({
   }
 
   async function save() {
+    // Check for editor name
+    if (!editorName.trim()) {
+      setShowNamePrompt(true);
+      setError('Please enter your name before saving');
+      return;
+    }
+
     setError(null);
     setSaving(true);
     try {
@@ -892,19 +973,38 @@ export default function Editor({
         setSaving(false);
         return;
       }
-      const fm = buildFrontmatter({ title, section, icon, published });
+
+      // Build new edit history with current edit at the top
+      const newHistoryEntry: EditHistoryEntry = {
+        name: editorName.trim(),
+        date: todayHuman(),
+      };
+      const newHistory = [newHistoryEntry, ...existingHistory].slice(0, 10);
+
+      const fm = buildFrontmatter({
+        title,
+        section,
+        icon,
+        published,
+        updatedBy: editorName.trim(),
+        editHistory: newHistory,
+      });
       const content = fm + '\n' + body.trim() + '\n';
       const path = targetPath;
+      const commitMessage = `wiki: update ${path} by ${editorName.trim()}`;
       const res = await fetch('/api/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'save', token, path, content }),
+        body: JSON.stringify({ action: 'save', token, path, content, message: commitMessage }),
       });
       const json = await res.json();
       if (!res.ok) {
         if (res.status === 401) clearStoredToken();
         throw new Error(json.error || 'Save failed');
       }
+
+      // Update existing history for subsequent saves
+      setExistingHistory(newHistory);
 
       // Clear draft on successful save
       localStorage.removeItem(getDraftKey(mode));
@@ -1112,6 +1212,13 @@ export default function Editor({
   async function handleBulkImport() {
     if (importFiles.length === 0) return;
 
+    // Check for editor name
+    if (!editorName.trim()) {
+      setShowNamePrompt(true);
+      setError('Please enter your name before importing');
+      return;
+    }
+
     setImportLoading(true);
     setImportProgress({ current: 0, total: importFiles.length });
     setError(null);
@@ -1122,6 +1229,7 @@ export default function Editor({
       return;
     }
 
+    const importerName = editorName.trim();
     let successCount = 0;
     for (let i = 0; i < importFiles.length; i++) {
       const file = importFiles[i];
@@ -1136,16 +1244,19 @@ export default function Editor({
           section: importSection,
           icon: file.icon,
           published: true,
+          updatedBy: importerName,
+          editHistory: [{ name: importerName, date: todayHuman() }],
         });
         // Add order to frontmatter
         const fmWithOrder = fm.replace('published: true', `published: true\norder: ${file.order}`);
         const fullContent = fmWithOrder + '\n' + file.content + '\n';
         const path = `${importSection}/${file.slug}`;
+        const commitMessage = `wiki: import ${path} by ${importerName}`;
 
         const res = await fetch('/api/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'save', token, path, content: fullContent }),
+          body: JSON.stringify({ action: 'save', token, path, content: fullContent, message: commitMessage }),
         });
 
         const json = await res.json();
@@ -1210,6 +1321,53 @@ export default function Editor({
             <Icons.IconX size={16} stroke={1.75} />
           </button>
         </header>
+
+        {/* Editor name prompt - shows once if name not set */}
+        {showNamePrompt && mode.kind !== 'manage' && (
+          <div className="px-5 py-3 bg-brand-50 border-b border-brand-100 flex items-center gap-3">
+            <Icons.IconUser size={16} stroke={1.75} className="text-brand shrink-0" />
+            <span className="text-[13px] text-brand-800">Your name for edit history:</span>
+            <input
+              type="text"
+              value={editorName}
+              onChange={(e) => setEditorNameState(e.target.value)}
+              placeholder="e.g., Ali Mirza"
+              className="flex-1 max-w-[200px] px-2 py-1 text-[13px] border border-brand-200 rounded bg-white focus:outline-none focus:border-brand-400"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && editorName.trim()) {
+                  setEditorName(editorName.trim());
+                  setShowNamePrompt(false);
+                }
+              }}
+            />
+            <button
+              onClick={() => {
+                if (editorName.trim()) {
+                  setEditorName(editorName.trim());
+                  setShowNamePrompt(false);
+                }
+              }}
+              disabled={!editorName.trim()}
+              className="px-3 py-1 text-[12px] font-medium bg-brand text-white rounded hover:bg-brand-600 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        )}
+
+        {/* Show current editor name (subtle, when set) */}
+        {!showNamePrompt && editorName && mode.kind !== 'manage' && (
+          <div className="px-5 py-1.5 bg-sidebar border-b border-hairline flex items-center gap-2 text-[11px] text-muted">
+            <Icons.IconUser size={12} stroke={1.75} />
+            <span>Editing as <strong className="font-medium text-ink">{editorName}</strong></span>
+            <button
+              onClick={() => setShowNamePrompt(true)}
+              className="text-brand hover:underline ml-1"
+            >
+              change
+            </button>
+          </div>
+        )}
 
         {/* Import mode UI */}
         {mode.kind === 'import' ? (
