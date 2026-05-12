@@ -7,6 +7,23 @@ import remarkGfm from 'remark-gfm';
 import * as Icons from '@tabler/icons-react';
 import type { IconProps } from '@tabler/icons-react';
 import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   clearStoredToken,
   getStoredToken,
   setStoredToken,
@@ -601,6 +618,229 @@ const markdownComponents = {
   ),
 };
 
+// Sortable section row for drag-and-drop reordering
+function SortableSectionRow({
+  section,
+  isEditing,
+  editingSectionData,
+  setEditingSectionData,
+  savingSectionId,
+  onStartEdit,
+  onCancelEdit,
+  onSave,
+  sections,
+  getIconComponent,
+}: {
+  section: SectionInfo;
+  isEditing: boolean;
+  editingSectionData: { label: string; icon: string; order: number; parent: string } | null;
+  setEditingSectionData: React.Dispatch<React.SetStateAction<{ label: string; icon: string; order: number; parent: string } | null>>;
+  savingSectionId: string | null;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSave: () => void;
+  sections: SectionInfo[];
+  getIconComponent: (name: string) => React.ComponentType<IconProps>;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: section.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  const IconComponent = section.icon ? getIconComponent(section.icon) : Icons.IconFolder;
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={style}
+      className={`border-t border-hairline ${isDragging ? 'bg-brand-50' : ''}`}
+    >
+      <td className="py-2.5 pr-3 w-8">
+        <button
+          {...attributes}
+          {...listeners}
+          className="p-1 cursor-grab active:cursor-grabbing text-muted hover:text-ink"
+          title="Drag to reorder"
+        >
+          <Icons.IconGripVertical size={16} stroke={1.5} />
+        </button>
+      </td>
+      <td className="py-2.5 pr-3" style={{ paddingLeft: isEditing ? 0 : section.depth * 20 }}>
+        <span className="flex items-center gap-2">
+          <IconComponent size={14} stroke={1.75} className="text-muted shrink-0" />
+          {isEditing ? (
+            <>
+              <input
+                type="text"
+                value={editingSectionData?.label ?? section.label}
+                onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, label: e.target.value } : null)}
+                className="flex-1 px-2 py-1 text-[13px] border border-hairline rounded"
+              />
+              <select
+                value={editingSectionData?.parent ?? ''}
+                onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, parent: e.target.value } : null)}
+                className="px-2 py-1 text-[12px] border border-hairline rounded bg-white"
+              >
+                <option value="">Top level</option>
+                {sections
+                  .filter(sec => sec.depth === 0 && sec.id !== section.id && !sec.id.startsWith(section.id + '/'))
+                  .map(sec => (
+                    <option key={sec.id} value={sec.id}>
+                      Under: {sec.label}
+                    </option>
+                  ))}
+              </select>
+            </>
+          ) : (
+            <span className="font-medium">{section.label}</span>
+          )}
+          {!isEditing && section.parent && (
+            <span className="text-[10px] text-muted bg-sidebar px-1.5 py-0.5 rounded">
+              nested
+            </span>
+          )}
+        </span>
+      </td>
+      <td className="py-2.5 pr-3">
+        {isEditing ? (
+          <input
+            type="text"
+            value={editingSectionData?.icon ?? section.icon ?? 'folder'}
+            onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, icon: e.target.value } : null)}
+            className="w-24 px-2 py-1 text-[13px] border border-hairline rounded"
+            placeholder="folder"
+          />
+        ) : (
+          <span className="text-muted font-mono text-[11px]">{section.icon || 'folder'}</span>
+        )}
+      </td>
+      <td className="py-2.5 text-right">
+        {isEditing ? (
+          <span className="flex items-center justify-end gap-1">
+            <button
+              onClick={onCancelEdit}
+              className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-muted"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onSave}
+              disabled={savingSectionId === section.id}
+              className="px-2 py-1 text-[12px] rounded bg-brand text-white hover:bg-brand-600 disabled:opacity-50"
+            >
+              {savingSectionId === section.id ? 'Saving...' : 'Save'}
+            </button>
+          </span>
+        ) : (
+          <button
+            onClick={onStartEdit}
+            className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
+          >
+            Edit
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// Page type for drag-and-drop
+interface PageInfo {
+  title: string;
+  path: string;
+  section: string;
+  published?: boolean;
+  order?: number;
+}
+
+// Sortable page row for drag-and-drop reordering within sections
+function SortablePageRow({
+  page,
+  depth,
+  onEdit,
+  onDelete,
+}: {
+  page: PageInfo;
+  depth: number;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: page.path });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={style}
+      className={`border-t border-hairline ${isDragging ? 'bg-brand-50' : ''}`}
+    >
+      <td className="py-2.5 pr-2 w-8" style={{ paddingLeft: 8 + depth * 16 }}>
+        <button
+          {...attributes}
+          {...listeners}
+          className="p-1 cursor-grab active:cursor-grabbing text-muted hover:text-ink"
+          title="Drag to reorder"
+        >
+          <Icons.IconGripVertical size={14} stroke={1.5} />
+        </button>
+      </td>
+      <td className="py-2.5 pr-3 font-medium">
+        {page.title}
+      </td>
+      <td className="py-2.5 pr-3 text-muted font-mono text-[12px]">
+        {page.path}.mdx
+      </td>
+      <td className="py-2.5 pr-3">
+        {page.published === false ? (
+          <span className="text-[11px] px-1.5 py-0.5 rounded bg-sidebar border border-hairline text-muted">
+            Draft
+          </span>
+        ) : (
+          <span className="text-[11px] px-1.5 py-0.5 rounded bg-brand-50 text-brand-700">
+            Published
+          </span>
+        )}
+      </td>
+      <td className="py-2.5 text-right">
+        <button
+          onClick={onEdit}
+          className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
+        >
+          Edit
+        </button>
+        <button
+          onClick={onDelete}
+          className="px-2 py-1 text-[12px] rounded hover:bg-red-50 text-red-600"
+        >
+          Delete
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 export default function Editor({
   mode,
   onClose,
@@ -608,7 +848,7 @@ export default function Editor({
 }: {
   mode: EditorMode;
   onClose: () => void;
-  initialPages?: Array<{ title: string; path: string; section: string; published?: boolean }>;
+  initialPages?: Array<{ title: string; path: string; section: string; published?: boolean; order?: number }>;
 }) {
   const router = useRouter();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -925,9 +1165,14 @@ export default function Editor({
       grouped[page.section].push(page);
     }
 
-    // Sort pages within each group by title
+    // Sort pages within each group by order (then by title as tiebreaker)
     for (const sectionId of Object.keys(grouped)) {
-      grouped[sectionId].sort((a, b) => a.title.localeCompare(b.title));
+      grouped[sectionId].sort((a, b) => {
+        const orderA = a.order ?? 999;
+        const orderB = b.order ?? 999;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.title.localeCompare(b.title);
+      });
     }
 
     // Get ordered section IDs based on sections array (which is already hierarchically sorted)
@@ -1169,6 +1414,154 @@ export default function Editor({
       setError(e instanceof Error ? e.message : 'Update failed');
     } finally {
       setSavingSectionId(null);
+    }
+  }
+
+  // Sensors for drag-and-drop
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // Handle section reorder via drag-and-drop
+  async function handleSectionDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = sections.findIndex(s => s.id === active.id);
+    const newIndex = sections.findIndex(s => s.id === over.id);
+
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    // Optimistically update local state
+    const newSections = arrayMove(sections, oldIndex, newIndex);
+    setSections(newSections);
+
+    // Calculate new order values based on position
+    const updates: Array<{ id: string; order: number }> = [];
+    newSections.forEach((s, idx) => {
+      const newOrder = (idx + 1) * 10; // Use increments of 10 for flexibility
+      if (s.order !== newOrder) {
+        updates.push({ id: s.id, order: newOrder });
+      }
+    });
+
+    if (updates.length === 0) return;
+
+    // Save all order changes
+    try {
+      const token = await ensureToken();
+      if (!token) return;
+
+      for (const update of updates) {
+        const sec = newSections.find(s => s.id === update.id);
+        if (!sec) continue;
+
+        await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update-section',
+            token,
+            sectionId: update.id,
+            label: sec.label,
+            icon: sec.icon || 'folder',
+            order: update.order,
+          }),
+        });
+      }
+
+      // Update local state with new order values
+      setSections(prev => prev.map(s => {
+        const update = updates.find(u => u.id === s.id);
+        return update ? { ...s, order: update.order } : s;
+      }));
+
+      setToast('Section order updated');
+      setTimeout(() => router.refresh(), 800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update order');
+      // Revert on error
+      const sectionsRes = await fetch('/api/sections');
+      const sectionsJson = await sectionsRes.json();
+      if (sectionsJson.sections) {
+        setSections(sectionsJson.sections);
+      }
+    }
+  }
+
+  // Handle page reorder via drag-and-drop within a section
+  async function handlePageDragEnd(sectionId: string, event: DragEndEvent) {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) return;
+
+    // Get pages in this section
+    const sectionPages = pages.filter(p => p.section === sectionId);
+    const oldIndex = sectionPages.findIndex(p => p.path === active.id);
+    const newIndex = sectionPages.findIndex(p => p.path === over.id);
+
+    if (oldIndex === -1 || newIndex === -1) return;
+
+    // Reorder pages in this section
+    const reorderedSectionPages = arrayMove(sectionPages, oldIndex, newIndex);
+
+    // Calculate new order values based on position
+    const updates: Array<{ path: string; order: number }> = [];
+    reorderedSectionPages.forEach((p, idx) => {
+      const newOrder = (idx + 1) * 10;
+      if ((p.order ?? 999) !== newOrder) {
+        updates.push({ path: p.path, order: newOrder });
+      }
+    });
+
+    if (updates.length === 0) return;
+
+    // Optimistically update local state
+    setPages(prev => {
+      const otherPages = prev.filter(p => p.section !== sectionId);
+      const updatedSectionPages = reorderedSectionPages.map((p, idx) => ({
+        ...p,
+        order: (idx + 1) * 10
+      }));
+      return [...otherPages, ...updatedSectionPages];
+    });
+
+    // Save all order changes
+    try {
+      const token = await ensureToken();
+      if (!token) return;
+
+      for (const update of updates) {
+        await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update-page-order',
+            token,
+            path: update.path,
+            order: update.order,
+          }),
+        });
+      }
+
+      setToast('Page order updated');
+      setTimeout(() => router.refresh(), 800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update page order');
+      // Revert on error - refetch pages
+      const pagesRes = await fetch('/api/pages');
+      const pagesJson = await pagesRes.json();
+      if (pagesJson.pages) {
+        setPages(pagesJson.pages);
+      }
     }
   }
 
@@ -1968,9 +2361,13 @@ Tips:
             {/* Pages tab content */}
             {manageTab === 'pages' && (
               <div className="flex-1 overflow-y-auto p-5">
+                <p className="text-[12px] text-muted mb-4">
+                  Drag pages to reorder them within their section.
+                </p>
                 <table className="w-full text-[13px]">
                   <thead>
                     <tr className="text-left text-muted text-[11px] uppercase tracking-wide">
+                      <th className="py-2 font-semibold w-8"></th>
                       <th className="py-2 font-semibold">Title</th>
                       <th className="py-2 font-semibold">Path</th>
                       <th className="py-2 font-semibold">Status</th>
@@ -1990,7 +2387,7 @@ Tips:
                           {/* Section header row */}
                           <tr className="bg-sidebar/50">
                             <td
-                              colSpan={4}
+                              colSpan={5}
                               className="py-2.5 px-2 font-semibold text-[12px]"
                               style={{ paddingLeft: 8 + depth * 16 }}
                             >
@@ -2003,29 +2400,22 @@ Tips:
                               </span>
                             </td>
                           </tr>
-                          {/* Pages in this section */}
-                          {group.pages.map((p) => (
-                            <tr key={p.path} className="border-t border-hairline">
-                              <td className="py-2.5 pr-3 font-medium" style={{ paddingLeft: 8 + depth * 16 }}>
-                                {p.title}
-                              </td>
-                              <td className="py-2.5 pr-3 text-muted font-mono text-[12px]">
-                                {p.path}.mdx
-                              </td>
-                              <td className="py-2.5 pr-3">
-                                {p.published === false ? (
-                                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-sidebar border border-hairline text-muted">
-                                    Draft
-                                  </span>
-                                ) : (
-                                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-brand-50 text-brand-700">
-                                    Published
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-2.5 text-right">
-                                <button
-                                  onClick={() => {
+                          {/* Pages in this section - with drag and drop */}
+                          <DndContext
+                            sensors={sensors}
+                            collisionDetection={closestCenter}
+                            onDragEnd={(event) => handlePageDragEnd(group.sectionId, event)}
+                          >
+                            <SortableContext
+                              items={group.pages.map(p => p.path)}
+                              strategy={verticalListSortingStrategy}
+                            >
+                              {group.pages.map((p) => (
+                                <SortablePageRow
+                                  key={p.path}
+                                  page={p}
+                                  depth={depth}
+                                  onEdit={() => {
                                     onClose();
                                     router.push(`/${p.path}`);
                                     setTimeout(() => {
@@ -2036,25 +2426,17 @@ Tips:
                                       );
                                     }, 100);
                                   }}
-                                  className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  onClick={() => remove(p.path)}
-                                  className="px-2 py-1 text-[12px] rounded hover:bg-red-50 text-red-600"
-                                >
-                                  Delete
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                                  onDelete={() => remove(p.path)}
+                                />
+                              ))}
+                            </SortableContext>
+                          </DndContext>
                         </React.Fragment>
                       );
                     })}
                     {pages.length === 0 && (
                       <tr>
-                        <td colSpan={4} className="py-6 text-center text-muted">
+                        <td colSpan={5} className="py-6 text-center text-muted">
                           No pages yet.
                         </td>
                       </tr>
@@ -2068,130 +2450,59 @@ Tips:
             {manageTab === 'sections' && (
               <div className="flex-1 overflow-y-auto p-5">
                 <p className="text-[12px] text-muted mb-4">
-                  Edit section order to control sidebar display. Lower order values appear first.
-                  Each change commits to GitHub.
+                  Drag sections to reorder them in the sidebar. Click Edit to change label, icon, or move to a different parent.
                 </p>
-                <table className="w-full text-[13px]">
-                  <thead>
-                    <tr className="text-left text-muted text-[11px] uppercase tracking-wide">
-                      <th className="py-2 font-semibold">Section</th>
-                      <th className="py-2 font-semibold w-20">Order</th>
-                      <th className="py-2 font-semibold w-28">Icon</th>
-                      <th className="py-2 font-semibold text-right w-32">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sections.map((s) => {
-                      const isEditing = editingSectionId === s.id;
-                      const IconComponent = s.icon ? getIconComponent(s.icon) : Icons.IconFolder;
-
-                      return (
-                        <tr key={s.id} className="border-t border-hairline">
-                          <td className="py-2.5 pr-3" style={{ paddingLeft: isEditing ? 0 : s.depth * 20 }}>
-                            <span className="flex items-center gap-2">
-                              <IconComponent size={14} stroke={1.75} className="text-muted shrink-0" />
-                              {isEditing ? (
-                                <>
-                                  <input
-                                    type="text"
-                                    value={editingSectionData?.label ?? s.label}
-                                    onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, label: e.target.value } : null)}
-                                    className="flex-1 px-2 py-1 text-[13px] border border-hairline rounded"
-                                  />
-                                  <select
-                                    value={editingSectionData?.parent ?? ''}
-                                    onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, parent: e.target.value } : null)}
-                                    className="px-2 py-1 text-[12px] border border-hairline rounded bg-white"
-                                  >
-                                    <option value="">Top level</option>
-                                    {sections
-                                      .filter(sec => sec.depth === 0 && sec.id !== s.id && !sec.id.startsWith(s.id + '/'))
-                                      .map(sec => (
-                                        <option key={sec.id} value={sec.id}>
-                                          Under: {sec.label}
-                                        </option>
-                                      ))}
-                                  </select>
-                                </>
-                              ) : (
-                                <span className="font-medium">{s.label}</span>
-                              )}
-                              {!isEditing && s.parent && (
-                                <span className="text-[10px] text-muted bg-sidebar px-1.5 py-0.5 rounded">
-                                  nested
-                                </span>
-                              )}
-                            </span>
-                          </td>
-                          <td className="py-2.5 pr-3">
-                            {isEditing ? (
-                              <input
-                                type="number"
-                                value={editingSectionData?.order ?? s.order}
-                                onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, order: parseInt(e.target.value) || 0 } : null)}
-                                className="w-16 px-2 py-1 text-[13px] border border-hairline rounded text-center"
-                              />
-                            ) : (
-                              <span className="text-muted">{s.order}</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 pr-3">
-                            {isEditing ? (
-                              <input
-                                type="text"
-                                value={editingSectionData?.icon ?? s.icon ?? 'folder'}
-                                onChange={(e) => setEditingSectionData(prev => prev ? { ...prev, icon: e.target.value } : null)}
-                                className="w-24 px-2 py-1 text-[13px] border border-hairline rounded"
-                                placeholder="folder"
-                              />
-                            ) : (
-                              <span className="text-muted font-mono text-[11px]">{s.icon || 'folder'}</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 text-right">
-                            {isEditing ? (
-                              <span className="flex items-center justify-end gap-1">
-                                <button
-                                  onClick={() => {
-                                    setEditingSectionId(null);
-                                    setEditingSectionData(null);
-                                  }}
-                                  className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-muted"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  onClick={() => editingSectionData && saveSection(s.id, editingSectionData)}
-                                  disabled={savingSectionId === s.id}
-                                  className="px-2 py-1 text-[12px] rounded bg-brand text-white hover:bg-brand-600 disabled:opacity-50"
-                                >
-                                  {savingSectionId === s.id ? 'Saving...' : 'Save'}
-                                </button>
-                              </span>
-                            ) : (
-                              <button
-                                onClick={() => {
-                                  setEditingSectionId(s.id);
-                                  setEditingSectionData({ label: s.label, icon: s.icon || 'folder', order: s.order, parent: s.parent || '' });
-                                }}
-                                className="px-2 py-1 text-[12px] rounded hover:bg-black/[0.04] text-brand"
-                              >
-                                Edit
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {sections.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="py-6 text-center text-muted">
-                          No sections yet.
-                        </td>
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleSectionDragEnd}
+                >
+                  <table className="w-full text-[13px]">
+                    <thead>
+                      <tr className="text-left text-muted text-[11px] uppercase tracking-wide">
+                        <th className="py-2 font-semibold w-8"></th>
+                        <th className="py-2 font-semibold">Section</th>
+                        <th className="py-2 font-semibold w-28">Icon</th>
+                        <th className="py-2 font-semibold text-right w-32">Actions</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <SortableContext
+                      items={sections.map(s => s.id)}
+                      strategy={verticalListSortingStrategy}
+                    >
+                      <tbody>
+                        {sections.map((s) => (
+                          <SortableSectionRow
+                            key={s.id}
+                            section={s}
+                            isEditing={editingSectionId === s.id}
+                            editingSectionData={editingSectionData}
+                            setEditingSectionData={setEditingSectionData}
+                            savingSectionId={savingSectionId}
+                            onStartEdit={() => {
+                              setEditingSectionId(s.id);
+                              setEditingSectionData({ label: s.label, icon: s.icon || 'folder', order: s.order, parent: s.parent || '' });
+                            }}
+                            onCancelEdit={() => {
+                              setEditingSectionId(null);
+                              setEditingSectionData(null);
+                            }}
+                            onSave={() => editingSectionData && saveSection(s.id, editingSectionData)}
+                            sections={sections}
+                            getIconComponent={getIconComponent}
+                          />
+                        ))}
+                        {sections.length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="py-6 text-center text-muted">
+                              No sections yet.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </SortableContext>
+                  </table>
+                </DndContext>
               </div>
             )}
           </div>

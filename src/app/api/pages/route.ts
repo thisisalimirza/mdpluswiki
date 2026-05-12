@@ -13,6 +13,7 @@ export async function GET() {
     icon: p.frontmatter.icon,
     updatedAt: p.frontmatter.updatedAt,
     published: p.frontmatter.published,
+    order: p.frontmatter.order ?? 999,
   }));
   return NextResponse.json({ pages });
 }

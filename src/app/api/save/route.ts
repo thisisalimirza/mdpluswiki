@@ -12,7 +12,8 @@ type Body =
   | { action: 'delete'; token: string; path: string }
   | { action: 'create-section'; token: string; sectionId: string; label: string; icon?: string; order?: number }
   | { action: 'update-section'; token: string; sectionId: string; label?: string; icon?: string; order?: number }
-  | { action: 'move-section'; token: string; sectionId: string; newParent: string | null; label: string; icon: string; order: number };
+  | { action: 'move-section'; token: string; sectionId: string; newParent: string | null; label: string; icon: string; order: number }
+  | { action: 'update-page-order'; token: string; path: string; order: number };
 
 export async function POST(req: NextRequest) {
   let body: Body;
@@ -195,6 +196,54 @@ export async function POST(req: NextRequest) {
       });
 
       return NextResponse.json({ success: true, newSectionId });
+    }
+
+    if (body.action === 'update-page-order') {
+      const ok = await verifyToken(body.token);
+      if (!ok) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      if (!isValidPath(body.path)) {
+        return NextResponse.json({ error: 'Invalid path' }, { status: 400 });
+      }
+
+      const filePath = `content/${body.path}.mdx`;
+      const content = await getFileContent(filePath);
+      if (!content) {
+        return NextResponse.json({ error: 'File not found' }, { status: 404 });
+      }
+
+      // Parse and update frontmatter with new order
+      const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+      if (!fmMatch) {
+        return NextResponse.json({ error: 'Invalid file format' }, { status: 400 });
+      }
+
+      const frontmatterLines = fmMatch[1].split('\n');
+      const bodyContent = fmMatch[2];
+      let orderFound = false;
+
+      // Update or add order field
+      const updatedLines = frontmatterLines.map(line => {
+        if (line.startsWith('order:')) {
+          orderFound = true;
+          return `order: ${body.order}`;
+        }
+        return line;
+      });
+
+      if (!orderFound) {
+        // Add order before the end
+        updatedLines.push(`order: ${body.order}`);
+      }
+
+      const newContent = `---\n${updatedLines.join('\n')}\n---\n${bodyContent}`;
+
+      const result = await commitFile({
+        filePath,
+        content: newContent,
+        message: `wiki: reorder ${body.path} via MDplus wiki editor`,
+      });
+
+      return NextResponse.json({ success: true, commitSha: result.commitSha });
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
