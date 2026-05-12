@@ -1,5 +1,5 @@
 {
   "label": "Flagship Events",
-  "icon": "folder",
-  "order": 999
+  "icon": "calendar-event",
+  "order": 5
 }

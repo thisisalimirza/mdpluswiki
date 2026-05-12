@@ -26,7 +26,21 @@ interface SectionInfo {
 export type EditorMode =
   | { kind: 'edit'; path: string }
   | { kind: 'new'; defaultSection?: string }
-  | { kind: 'manage' };
+  | { kind: 'manage' }
+  | { kind: 'import' };
+
+// Interface for files being imported
+interface ImportFile {
+  id: string;
+  filename: string;
+  title: string;
+  icon: string;
+  order: number;
+  content: string;
+  slug: string;
+  status: 'pending' | 'importing' | 'done' | 'error';
+  error?: string;
+}
 
 // Popular icons for the icon picker
 const POPULAR_ICONS = [
@@ -566,6 +580,13 @@ export default function Editor({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  // Import mode state
+  const [importFiles, setImportFiles] = useState<ImportFile[]>([]);
+  const [importSection, setImportSection] = useState<string>('overview');
+  const [importPaths, setImportPaths] = useState('');
+  const [importLoading, setImportLoading] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+
   // Fetch sections on mount
   useEffect(() => {
     async function fetchSections() {
@@ -924,6 +945,155 @@ export default function Editor({
     return (Icons as unknown as Record<string, React.ComponentType<IconProps>>)[key] || Icons.IconFile;
   }
 
+  // Import helpers
+  function parseImportedFile(filename: string, content: string): Omit<ImportFile, 'status' | 'error'> {
+    // Check if file already has frontmatter
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    let title = '';
+    let bodyContent = content;
+
+    if (fmMatch) {
+      // Has frontmatter - extract title from it
+      const fmLines = fmMatch[1].split('\n');
+      for (const line of fmLines) {
+        const titleMatch = line.match(/^title:\s*["']?(.+?)["']?\s*$/);
+        if (titleMatch) {
+          title = titleMatch[1];
+          break;
+        }
+      }
+      bodyContent = fmMatch[2];
+    }
+
+    // If no title from frontmatter, try to get from first heading
+    if (!title) {
+      const headingMatch = content.match(/^#\s+(.+)$/m);
+      if (headingMatch) {
+        title = headingMatch[1].replace(/[*_`]/g, ''); // Remove markdown formatting
+        // Remove the heading from body since we'll use frontmatter title
+        bodyContent = bodyContent.replace(/^#\s+.+\n*/m, '');
+      }
+    }
+
+    // If still no title, use filename
+    if (!title) {
+      title = filename.replace(/\.mdx?$/, '').replace(/[-_]/g, ' ');
+      title = title.charAt(0).toUpperCase() + title.slice(1);
+    }
+
+    // Generate slug from filename
+    const slug = filename.replace(/\.mdx?$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+    return {
+      id: Math.random().toString(36).slice(2),
+      filename,
+      title,
+      icon: 'file',
+      order: 1,
+      content: bodyContent.trim(),
+      slug,
+    };
+  }
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files) return;
+
+    const newFiles: ImportFile[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (!file.name.endsWith('.mdx') && !file.name.endsWith('.md')) continue;
+
+      const content = await file.text();
+      const parsed = parseImportedFile(file.name, content);
+      newFiles.push({
+        ...parsed,
+        order: importFiles.length + i + 1,
+        status: 'pending',
+      });
+    }
+
+    setImportFiles(prev => [...prev, ...newFiles]);
+    e.target.value = ''; // Reset input
+  }
+
+  function updateImportFile(id: string, updates: Partial<ImportFile>) {
+    setImportFiles(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
+  }
+
+  function removeImportFile(id: string) {
+    setImportFiles(prev => prev.filter(f => f.id !== id));
+  }
+
+  async function handleBulkImport() {
+    if (importFiles.length === 0) return;
+
+    setImportLoading(true);
+    setImportProgress({ current: 0, total: importFiles.length });
+    setError(null);
+
+    const token = await ensureToken();
+    if (!token) {
+      setImportLoading(false);
+      return;
+    }
+
+    let successCount = 0;
+    for (let i = 0; i < importFiles.length; i++) {
+      const file = importFiles[i];
+      if (file.status === 'done') continue;
+
+      updateImportFile(file.id, { status: 'importing' });
+      setImportProgress({ current: i + 1, total: importFiles.length });
+
+      try {
+        const fm = buildFrontmatter({
+          title: file.title,
+          section: importSection,
+          icon: file.icon,
+          published: true,
+        });
+        // Add order to frontmatter
+        const fmWithOrder = fm.replace('published: true', `published: true\norder: ${file.order}`);
+        const fullContent = fmWithOrder + '\n' + file.content + '\n';
+        const path = `${importSection}/${file.slug}`;
+
+        const res = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'save', token, path, content: fullContent }),
+        });
+
+        const json = await res.json();
+        if (!res.ok) {
+          if (res.status === 401) {
+            clearStoredToken();
+            throw new Error('Session expired. Please try again.');
+          }
+          throw new Error(json.error || 'Save failed');
+        }
+
+        updateImportFile(file.id, { status: 'done' });
+        successCount++;
+      } catch (err) {
+        updateImportFile(file.id, {
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Import failed',
+        });
+      }
+    }
+
+    setImportLoading(false);
+    if (successCount === importFiles.length) {
+      setToast(`Successfully imported ${successCount} pages. Vercel will redeploy shortly.`);
+      setTimeout(() => {
+        router.refresh();
+      }, 1500);
+    } else if (successCount > 0) {
+      setToast(`Imported ${successCount} of ${importFiles.length} pages. Check errors below.`);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 grid place-items-center px-3 py-6">
       <div className="w-full max-w-[1000px] max-h-[92vh] bg-white rounded-card shadow-xl border border-hairline flex flex-col">
@@ -931,15 +1101,18 @@ export default function Editor({
           <div className="flex items-center gap-2">
             {mode.kind === 'edit' && <Icons.IconPencil size={16} stroke={1.75} className="text-brand" />}
             {mode.kind === 'new' && <Icons.IconPlus size={16} stroke={1.75} className="text-brand" />}
+            {mode.kind === 'import' && <Icons.IconUpload size={16} stroke={1.75} className="text-brand" />}
             {mode.kind === 'manage' && <Icons.IconSettings size={16} stroke={1.75} className="text-brand" />}
             <h2 className="font-serif text-[20px]">
               {mode.kind === 'edit'
                 ? 'Edit page'
                 : mode.kind === 'new'
                 ? (createType === 'page' ? 'New page' : 'New section')
+                : mode.kind === 'import'
+                ? 'Import pages'
                 : 'Manage pages'}
             </h2>
-            {hasUnsavedChanges && mode.kind !== 'manage' && (
+            {hasUnsavedChanges && mode.kind !== 'manage' && mode.kind !== 'import' && (
               <span className="text-[11px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
                 Unsaved changes
               </span>
@@ -954,7 +1127,159 @@ export default function Editor({
           </button>
         </header>
 
-        {mode.kind !== 'manage' ? (
+        {/* Import mode UI */}
+        {mode.kind === 'import' ? (
+          <div className="flex-1 overflow-y-auto p-5">
+            <div className="space-y-5">
+              {/* Section selector */}
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2">
+                  <span className="text-[12px] font-semibold text-muted uppercase tracking-wide">Import to section:</span>
+                  <select
+                    value={importSection}
+                    onChange={(e) => setImportSection(e.target.value)}
+                    className="px-3 py-1.5 border border-hairline rounded-md text-[14px] focus:outline-none focus:border-brand-300"
+                  >
+                    {sections.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.depth > 0 ? '└ '.repeat(s.depth) : ''}{s.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {/* File picker */}
+                <label className="flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-md cursor-pointer hover:bg-brand-600 transition-colors">
+                  <Icons.IconUpload size={16} stroke={1.75} />
+                  <span className="text-[13px] font-medium">Select MDX files</span>
+                  <input
+                    type="file"
+                    accept=".mdx,.md"
+                    multiple
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {/* File list */}
+              {importFiles.length === 0 ? (
+                <div className="border-2 border-dashed border-hairline rounded-lg p-10 text-center">
+                  <Icons.IconFileUpload size={48} stroke={1} className="mx-auto mb-3 text-muted" />
+                  <p className="text-[14px] text-muted mb-2">
+                    Select MDX files to import
+                  </p>
+                  <p className="text-[12px] text-muted">
+                    Files will be parsed automatically. Titles are extracted from headings or filenames.
+                  </p>
+                </div>
+              ) : (
+                <div className="border border-hairline rounded-lg overflow-hidden">
+                  <table className="w-full text-[13px]">
+                    <thead className="bg-sidebar">
+                      <tr className="text-left text-[11px] uppercase tracking-wide text-muted">
+                        <th className="py-2 px-3 font-semibold">Title</th>
+                        <th className="py-2 px-3 font-semibold w-24">Icon</th>
+                        <th className="py-2 px-3 font-semibold w-20">Order</th>
+                        <th className="py-2 px-3 font-semibold w-32">Slug</th>
+                        <th className="py-2 px-3 font-semibold w-24">Status</th>
+                        <th className="py-2 px-3 w-10"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importFiles.map((file, idx) => {
+                        const FileIcon = getIconComponentForTemplate(file.icon);
+                        return (
+                          <tr key={file.id} className="border-t border-hairline">
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                value={file.title}
+                                onChange={(e) => updateImportFile(file.id, { title: e.target.value })}
+                                className="w-full px-2 py-1 border border-hairline rounded text-[13px] focus:outline-none focus:border-brand-300"
+                                disabled={file.status !== 'pending'}
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <select
+                                value={file.icon}
+                                onChange={(e) => updateImportFile(file.id, { icon: e.target.value })}
+                                className="w-full px-2 py-1 border border-hairline rounded text-[13px] focus:outline-none focus:border-brand-300"
+                                disabled={file.status !== 'pending'}
+                              >
+                                {POPULAR_ICONS.slice(0, 20).map((icon) => (
+                                  <option key={icon} value={icon}>{icon}</option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="number"
+                                value={file.order}
+                                onChange={(e) => updateImportFile(file.id, { order: parseInt(e.target.value) || 1 })}
+                                className="w-full px-2 py-1 border border-hairline rounded text-[13px] focus:outline-none focus:border-brand-300"
+                                min={1}
+                                disabled={file.status !== 'pending'}
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              <input
+                                type="text"
+                                value={file.slug}
+                                onChange={(e) => updateImportFile(file.id, { slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })}
+                                className="w-full px-2 py-1 border border-hairline rounded text-[13px] font-mono focus:outline-none focus:border-brand-300"
+                                disabled={file.status !== 'pending'}
+                              />
+                            </td>
+                            <td className="py-2 px-3">
+                              {file.status === 'pending' && (
+                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-sidebar text-muted">Pending</span>
+                              )}
+                              {file.status === 'importing' && (
+                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">Importing...</span>
+                              )}
+                              {file.status === 'done' && (
+                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">Done</span>
+                              )}
+                              {file.status === 'error' && (
+                                <span className="text-[11px] px-1.5 py-0.5 rounded bg-red-50 text-red-700" title={file.error}>Error</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-3">
+                              {file.status === 'pending' && (
+                                <button
+                                  onClick={() => removeImportFile(file.id)}
+                                  className="p-1 rounded hover:bg-red-50 text-red-500"
+                                >
+                                  <Icons.IconX size={14} stroke={1.75} />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Import progress */}
+              {importLoading && (
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-2 bg-sidebar rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-brand transition-all duration-300"
+                      style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                    />
+                  </div>
+                  <span className="text-[12px] text-muted">
+                    {importProgress.current} / {importProgress.total}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : mode.kind !== 'manage' ? (
           <div className="flex-1 overflow-y-auto p-5 grid gap-4">
             {loading ? (
               <div className="text-center text-muted py-10">Loading…</div>
@@ -1410,7 +1735,9 @@ Tips:
               </button>
             )}
             <div className="text-[11px] text-muted">
-              {mode.kind !== 'manage'
+              {mode.kind === 'import'
+                ? `${importFiles.length} files ready to import`
+                : mode.kind !== 'manage'
                 ? 'Saving commits to GitHub. Vercel redeploys automatically.'
                 : 'Page history available in the GitHub repo.'}
             </div>
@@ -1422,8 +1749,19 @@ Tips:
             >
               Close
             </button>
+            {/* Import button */}
+            {mode.kind === 'import' && (
+              <button
+                onClick={handleBulkImport}
+                disabled={importLoading || importFiles.length === 0 || importFiles.every(f => f.status === 'done')}
+                className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50 flex items-center gap-2"
+              >
+                <Icons.IconUpload size={14} stroke={1.75} />
+                {importLoading ? 'Importing...' : `Import ${importFiles.filter(f => f.status === 'pending').length} pages`}
+              </button>
+            )}
             {/* Save button for page editing */}
-            {mode.kind !== 'manage' && !(mode.kind === 'new' && createType === 'section') && (
+            {mode.kind !== 'manage' && mode.kind !== 'import' && !(mode.kind === 'new' && createType === 'section') && (
               <button
                 onClick={save}
                 disabled={saving || !title || !body}

@@ -14,11 +14,13 @@ export default function TocPanel({
   onEdit,
   onNew,
   onManage,
+  onImport,
 }: {
   items: TocItem[];
   onEdit: () => void;
   onNew: () => void;
   onManage: () => void;
+  onImport: () => void;
 }) {
   const [active, setActive] = useState<string | null>(items[0]?.id ?? null);
 
@@ -58,13 +60,23 @@ export default function TocPanel({
           <Icons.IconPlus size={13} stroke={1.75} />
           New page
         </button>
-        <button
-          onClick={onManage}
-          className="flex items-center justify-center gap-1.5 w-full h-8 rounded-md text-[12px] font-medium text-muted hover:bg-black/[0.03]"
-        >
-          <Icons.IconSettings size={13} stroke={1.75} />
-          Manage
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onImport}
+            className="flex items-center justify-center gap-1.5 flex-1 h-8 rounded-md text-[12px] font-medium text-muted hover:bg-black/[0.03]"
+            title="Import MDX files"
+          >
+            <Icons.IconUpload size={13} stroke={1.75} />
+            Import
+          </button>
+          <button
+            onClick={onManage}
+            className="flex items-center justify-center gap-1.5 flex-1 h-8 rounded-md text-[12px] font-medium text-muted hover:bg-black/[0.03]"
+          >
+            <Icons.IconSettings size={13} stroke={1.75} />
+            Manage
+          </button>
+        </div>
       </div>
       <div className="text-[10.5px] font-semibold tracking-[0.08em] uppercase text-muted mb-2">
         On this page

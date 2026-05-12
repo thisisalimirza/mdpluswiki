@@ -35,13 +35,16 @@ export default function WikiShell({
   const openManage = useCallback(() => {
     setEditorMode({ kind: 'manage' });
   }, []);
+  const openImport = useCallback(() => {
+    setEditorMode({ kind: 'import' });
+  }, []);
 
   return (
     <div className="flex-1 min-w-0 flex">
       <main className="flex-1 min-w-0 px-5 md:px-10 lg:px-14 py-8 max-w-[820px] mx-auto w-full">
         {children}
       </main>
-      <TocPanel items={toc} onEdit={openEdit} onNew={openNew} onManage={openManage} />
+      <TocPanel items={toc} onEdit={openEdit} onNew={openNew} onManage={openManage} onImport={openImport} />
       {editorMode && (
         <Editor
           mode={editorMode}
