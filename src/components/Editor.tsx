@@ -31,6 +31,7 @@ import {
   setEditorName,
 } from './AuthGate';
 import { PAGE_TEMPLATES, type PageTemplate } from '@/lib/templates';
+import AIAssistant, { type AIApplyPayload } from './AIAssistant';
 
 // Section info from API
 interface SectionInfo {
@@ -44,7 +45,7 @@ interface SectionInfo {
 
 export type EditorMode =
   | { kind: 'edit'; path: string }
-  | { kind: 'new'; defaultSection?: string }
+  | { kind: 'new'; defaultSection?: string; prefill?: { title?: string; body?: string; icon?: string; section?: string } }
   | { kind: 'manage' }
   | { kind: 'import' };
 
@@ -852,13 +853,14 @@ export default function Editor({
 }) {
   const router = useRouter();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [title, setTitle] = useState('');
+  const prefill = mode.kind === 'new' ? mode.prefill : undefined;
+  const [title, setTitle] = useState(prefill?.title ?? '');
   const [section, setSection] = useState<string>(
-    mode.kind === 'new' ? mode.defaultSection || 'overview' : 'overview'
+    mode.kind === 'new' ? (prefill?.section ?? mode.defaultSection ?? 'overview') : 'overview'
   );
-  const [icon, setIcon] = useState('file');
+  const [icon, setIcon] = useState(prefill?.icon ?? 'file');
   const [published, setPublished] = useState(true);
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(prefill?.body ?? '');
   const [loading, setLoading] = useState(mode.kind === 'edit');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -911,6 +913,9 @@ export default function Editor({
   const [showNamePrompt, setShowNamePrompt] = useState(false);
   const [existingHistory, setExistingHistory] = useState<Array<{ name: string; date: string; summary?: string }>>([]);
   const [editSummary, setEditSummary] = useState<string>('');
+
+  // AI assistant
+  const [showAI, setShowAI] = useState(false);
 
   // Load editor name from localStorage on mount
   useEffect(() => {
@@ -1755,9 +1760,23 @@ export default function Editor({
     }
   }
 
+  function handleAIApply(payload: AIApplyPayload) {
+    setBody(payload.body);
+    if (payload.title) setTitle(payload.title);
+    if (payload.icon) setIcon(payload.icon);
+    if (payload.section && mode.kind === 'new') setSection(payload.section);
+    setActiveTab('edit');
+  }
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 grid place-items-center px-3 py-6">
-      <div className="w-full max-w-[1000px] max-h-[92vh] bg-white rounded-card shadow-xl border border-hairline flex flex-col">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-3 py-6">
+      <div
+        className={`w-full max-h-[92vh] bg-white rounded-card shadow-xl border border-hairline flex overflow-hidden transition-all ${
+          showAI ? 'max-w-[1380px] flex-row' : 'max-w-[1000px] flex-col'
+        }`}
+      >
+        {/* Main editor column */}
+        <div className={`flex flex-col overflow-hidden ${showAI ? 'flex-1 min-w-0 max-h-[92vh]' : 'w-full max-h-[92vh]'}`}>
         <header className="flex items-center justify-between px-5 py-3 border-b border-hairline">
           <div className="flex items-center gap-2">
             {mode.kind === 'edit' && <Icons.IconPencil size={16} stroke={1.75} className="text-brand" />}
@@ -2255,11 +2274,26 @@ export default function Editor({
                         Preview
                       </button>
                     </div>
-                    {activeTab === 'edit' && (
-                      <div className="text-[10px] text-muted">
-                        Auto-saving draft locally
-                      </div>
-                    )}
+                    <div className="flex items-center gap-3">
+                      {activeTab === 'edit' && !showAI && (
+                        <div className="text-[10px] text-muted">
+                          Auto-saving draft locally
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowAI((v) => !v)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors border ${
+                          showAI
+                            ? 'bg-brand text-white border-brand'
+                            : 'bg-white border-hairline hover:border-brand-200 hover:bg-brand-50 hover:text-brand text-muted'
+                        }`}
+                        title="Open AI Assistant"
+                      >
+                        <Icons.IconSparkles size={14} stroke={1.75} />
+                        AI
+                      </button>
+                    </div>
                   </div>
 
                   {activeTab === 'edit' ? (
@@ -2699,6 +2733,24 @@ Tips:
             )}
           </div>
         </footer>
+        </div>{/* end main editor column */}
+
+        {/* AI Assistant panel */}
+        {showAI && (
+          <div className="w-[380px] shrink-0 flex flex-col overflow-hidden border-l border-hairline max-h-[92vh]">
+            <AIAssistant
+              token={getStoredToken() ?? ''}
+              sections={sections.map((s) => ({ id: s.id, label: s.label }))}
+              currentPageContext={
+                (mode.kind === 'edit' || mode.kind === 'new') && title
+                  ? { title, section, body }
+                  : undefined
+              }
+              onApply={handleAIApply}
+              onClose={() => setShowAI(false)}
+            />
+          </div>
+        )}
       </div>
 
       {/* New Section Modal */}
