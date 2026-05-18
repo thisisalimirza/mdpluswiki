@@ -32,6 +32,7 @@ import {
 } from './AuthGate';
 import { PAGE_TEMPLATES, type PageTemplate } from '@/lib/templates';
 import AIAssistant, { type AIApplyPayload } from './AIAssistant';
+import DiffReview from './DiffReview';
 
 // Section info from API
 interface SectionInfo {
@@ -916,6 +917,10 @@ export default function Editor({
 
   // AI assistant
   const [showAI, setShowAI] = useState(false);
+  const [isAIGenerated, setIsAIGenerated] = useState(!!prefill?.body);
+  const [showDiffReview, setShowDiffReview] = useState(false);
+  const [originalBodyForDiff, setOriginalBodyForDiff] = useState('');
+  const [originalTitleForDiff, setOriginalTitleForDiff] = useState('');
 
   // Load editor name from localStorage on mount
   useEffect(() => {
@@ -1278,6 +1283,8 @@ export default function Editor({
       localStorage.removeItem(getDraftKey(mode));
       setHasUnsavedChanges(false);
       setInitialValues({ title, body, icon });
+      setIsAIGenerated(false);
+      setOriginalBodyForDiff('');
 
       setToast(
         `Committed ${path}.mdx (${(json.commitSha as string).slice(0, 7)}). Vercel will redeploy in ~30s.`
@@ -1761,10 +1768,14 @@ export default function Editor({
   }
 
   function handleAIApply(payload: AIApplyPayload) {
+    // Capture current content as the baseline for the diff
+    setOriginalBodyForDiff(body);
+    setOriginalTitleForDiff(title);
     setBody(payload.body);
     if (payload.title) setTitle(payload.title);
     if (payload.icon) setIcon(payload.icon);
     if (payload.section && mode.kind === 'new') setSection(payload.section);
+    setIsAIGenerated(true);
     setActiveTab('edit');
   }
 
@@ -2655,11 +2666,32 @@ Tips:
             {/* Save button for page editing */}
             {mode.kind !== 'manage' && mode.kind !== 'import' && !(mode.kind === 'new' && createType === 'section') && (
               <button
-                onClick={save}
+                onClick={async () => {
+                  if (isAIGenerated) {
+                    // For edit mode, fetch the live original to diff against
+                    if (mode.kind === 'edit' && !originalBodyForDiff) {
+                      try {
+                        const res = await fetch(`/api/raw?path=${mode.path}`);
+                        const data = await res.json();
+                        if (data.content) {
+                          const m = (data.content as string).match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
+                          setOriginalBodyForDiff(m ? m[1].trim() : (data.content as string));
+                          setOriginalTitleForDiff(title);
+                        }
+                      } catch { /* fall through to review with empty original */ }
+                    }
+                    setShowDiffReview(true);
+                  } else {
+                    save();
+                  }
+                }}
                 disabled={saving || !title || !body}
-                className="px-4 py-1.5 rounded-md bg-brand text-white text-[13px] font-medium hover:bg-brand-600 disabled:opacity-50"
+                className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-white text-[13px] font-medium disabled:opacity-50 transition-colors ${
+                  isAIGenerated ? 'bg-amber-500 hover:bg-amber-600' : 'bg-brand hover:bg-brand-600'
+                }`}
               >
-                {saving ? 'Saving…' : 'Save & commit'}
+                {isAIGenerated && !saving && <Icons.IconSparkles size={13} stroke={1.75} />}
+                {saving ? 'Saving…' : isAIGenerated ? 'Review & commit' : 'Save & commit'}
               </button>
             )}
             {/* Create section button */}
@@ -2752,6 +2784,22 @@ Tips:
           </div>
         )}
       </div>
+
+      {/* AI Diff Review Modal */}
+      {showDiffReview && (
+        <DiffReview
+          title={title}
+          oldTitle={mode.kind === 'edit' ? originalTitleForDiff || title : undefined}
+          oldBody={originalBodyForDiff}
+          newBody={body}
+          isNew={mode.kind === 'new'}
+          onApprove={() => {
+            setShowDiffReview(false);
+            save();
+          }}
+          onCancel={() => setShowDiffReview(false)}
+        />
+      )}
 
       {/* New Section Modal */}
       {showNewSection && (
