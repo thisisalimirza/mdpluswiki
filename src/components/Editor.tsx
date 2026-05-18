@@ -918,6 +918,7 @@ export default function Editor({
   // AI assistant
   const [showAI, setShowAI] = useState(false);
   const [isAIGenerated, setIsAIGenerated] = useState(!!prefill?.body);
+  const [aiApplyFlash, setAiApplyFlash] = useState(false);
   const [showDiffReview, setShowDiffReview] = useState(false);
   const [originalBodyForDiff, setOriginalBodyForDiff] = useState('');
   const [originalTitleForDiff, setOriginalTitleForDiff] = useState('');
@@ -1768,7 +1769,7 @@ export default function Editor({
   }
 
   function handleAIApply(payload: AIApplyPayload) {
-    // Capture current content as the baseline for the diff
+    // Capture current content as the baseline for the pre-commit diff
     setOriginalBodyForDiff(body);
     setOriginalTitleForDiff(title);
     setBody(payload.body);
@@ -1777,6 +1778,9 @@ export default function Editor({
     if (payload.section && mode.kind === 'new') setSection(payload.section);
     setIsAIGenerated(true);
     setActiveTab('edit');
+    // Brief green flash on the textarea to indicate the apply landed
+    setAiApplyFlash(true);
+    setTimeout(() => setAiApplyFlash(false), 1400);
   }
 
   return (
@@ -2358,7 +2362,11 @@ export default function Editor({
                             }
                           }
                         }}
-                        className="font-mono text-[13px] leading-relaxed min-h-[35vh] px-3 py-3 border border-hairline rounded-b-md rounded-t-none focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100 resize-y bg-[#FBFAF7]"
+                        className={`font-mono text-[13px] leading-relaxed min-h-[35vh] px-3 py-3 border rounded-b-md rounded-t-none focus:outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100 resize-y transition-colors duration-700 ${
+                          aiApplyFlash
+                            ? 'border-emerald-400 bg-emerald-50 ring-2 ring-emerald-100'
+                            : 'border-hairline bg-[#FBFAF7]'
+                        }`}
                         placeholder="Start writing your page content here...
 
 Tips:
