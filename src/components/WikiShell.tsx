@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Editor, { type EditorMode } from './Editor';
 import TocPanel, { type TocItem } from './TocPanel';
+import FloatingAI from './FloatingAI';
 
 export default function WikiShell({
   path,
@@ -52,6 +53,7 @@ export default function WikiShell({
           initialPages={pages}
         />
       )}
+      <FloatingAI currentPath={path} />
     </div>
   );
 }

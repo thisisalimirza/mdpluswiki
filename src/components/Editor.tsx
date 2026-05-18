@@ -45,7 +45,7 @@ interface SectionInfo {
 
 export type EditorMode =
   | { kind: 'edit'; path: string }
-  | { kind: 'new'; defaultSection?: string }
+  | { kind: 'new'; defaultSection?: string; prefill?: { title?: string; body?: string; icon?: string; section?: string } }
   | { kind: 'manage' }
   | { kind: 'import' };
 
@@ -853,13 +853,14 @@ export default function Editor({
 }) {
   const router = useRouter();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [title, setTitle] = useState('');
+  const prefill = mode.kind === 'new' ? mode.prefill : undefined;
+  const [title, setTitle] = useState(prefill?.title ?? '');
   const [section, setSection] = useState<string>(
-    mode.kind === 'new' ? mode.defaultSection || 'overview' : 'overview'
+    mode.kind === 'new' ? (prefill?.section ?? mode.defaultSection ?? 'overview') : 'overview'
   );
-  const [icon, setIcon] = useState('file');
+  const [icon, setIcon] = useState(prefill?.icon ?? 'file');
   const [published, setPublished] = useState(true);
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(prefill?.body ?? '');
   const [loading, setLoading] = useState(mode.kind === 'edit');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
