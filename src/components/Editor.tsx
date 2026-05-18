@@ -273,10 +273,11 @@ function CalloutDropdown({
         type="button"
         onClick={() => setOpen(!open)}
         title="Insert callout box"
-        className="p-1.5 rounded hover:bg-brand-50 hover:text-brand transition-colors flex items-center gap-0.5"
+        className="px-2 py-1.5 rounded hover:bg-brand-50 hover:text-brand transition-colors flex items-center gap-1.5 text-[12px] font-medium"
       >
-        <Icons.IconInfoCircle size={16} stroke={1.75} />
-        <Icons.IconChevronDown size={12} stroke={2} />
+        <Icons.IconInfoCircle size={15} stroke={1.75} />
+        Callout
+        <Icons.IconChevronDown size={11} stroke={2} />
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1 bg-white border border-hairline rounded-md shadow-lg py-1 z-10 min-w-[140px]">
@@ -914,6 +915,7 @@ export default function Editor({
   const [showNamePrompt, setShowNamePrompt] = useState(false);
   const [existingHistory, setExistingHistory] = useState<Array<{ name: string; date: string; summary?: string }>>([]);
   const [editSummary, setEditSummary] = useState<string>('');
+  const [summaryMissing, setSummaryMissing] = useState(false);
 
   // AI assistant
   const [showAI, setShowAI] = useState(false);
@@ -924,6 +926,13 @@ export default function Editor({
   const [originalTitleForDiff, setOriginalTitleForDiff] = useState('');
 
   // Load editor name from localStorage on mount
+  // Lock background scroll while modal is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   useEffect(() => {
     const storedName = getEditorName();
     if (storedName) {
@@ -1230,13 +1239,18 @@ export default function Editor({
   }
 
   async function save() {
-    // Check for editor name
     if (!editorName.trim()) {
       setShowNamePrompt(true);
       setError('Please enter your name before saving');
       return;
     }
+    if (!editSummary.trim()) {
+      setSummaryMissing(true);
+      setError('Please add a brief summary of your changes');
+      return;
+    }
 
+    setSummaryMissing(false);
     setError(null);
     setSaving(true);
     try {
@@ -1871,7 +1885,7 @@ export default function Editor({
 
         {/* Import mode UI */}
         {mode.kind === 'import' ? (
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex-1 overflow-y-auto overscroll-contain p-5">
             <div className="space-y-5">
               {/* Section selector */}
               <div className="flex items-center gap-4 flex-wrap">
@@ -2022,7 +2036,7 @@ export default function Editor({
             </div>
           </div>
         ) : mode.kind !== 'manage' ? (
-          <div className="flex-1 overflow-y-auto p-5 grid gap-4">
+          <div className="flex-1 overflow-y-auto overscroll-contain p-5 grid gap-4">
             {loading ? (
               <div className="text-center text-muted py-10">Loading…</div>
             ) : (
@@ -2335,11 +2349,15 @@ export default function Editor({
 
                         <div className="flex items-center gap-0.5">
                           <CalloutDropdown onSelect={formatActions.callout} />
-                          <ToolbarButton
-                            icon={Icons.IconExternalLink}
-                            label="Insert link card"
+                          <button
+                            type="button"
                             onClick={formatActions.linkCard}
-                          />
+                            title="Insert link card"
+                            className="px-2 py-1.5 rounded hover:bg-brand-50 hover:text-brand transition-colors flex items-center gap-1.5 text-[12px] font-medium"
+                          >
+                            <Icons.IconExternalLink size={15} stroke={1.75} />
+                            Link card
+                          </button>
                         </div>
                       </div>
 
@@ -2437,7 +2455,7 @@ Tips:
 
             {/* Pages tab content */}
             {manageTab === 'pages' && (
-              <div className="flex-1 overflow-y-auto p-5">
+              <div className="flex-1 overflow-y-auto overscroll-contain p-5">
                 <p className="text-[12px] text-muted mb-4">
                   Drag pages to reorder them within their section.
                 </p>
@@ -2525,7 +2543,7 @@ Tips:
 
             {/* Sections tab content */}
             {manageTab === 'sections' && (
-              <div className="flex-1 overflow-y-auto p-5">
+              <div className="flex-1 overflow-y-auto overscroll-contain p-5">
                 <p className="text-[12px] text-muted mb-4">
                   Drag sections to reorder them in the sidebar. Click Edit to change label, icon, or move to a different parent.
                 </p>
@@ -2666,9 +2684,13 @@ Tips:
               <input
                 type="text"
                 value={editSummary}
-                onChange={(e) => setEditSummary(e.target.value)}
-                placeholder="Brief summary of changes (optional)"
-                className="w-48 px-2 py-1.5 text-[12px] border border-hairline rounded-md focus:outline-none focus:border-brand-300"
+                onChange={(e) => { setEditSummary(e.target.value); setSummaryMissing(false); }}
+                placeholder="What changed? (required)"
+                className={`w-52 px-2 py-1.5 text-[12px] border rounded-md focus:outline-none transition-colors ${
+                  summaryMissing
+                    ? 'border-red-400 bg-red-50 focus:border-red-400 ring-1 ring-red-200'
+                    : 'border-hairline focus:border-brand-300'
+                }`}
               />
             )}
             {/* Save button for page editing */}
@@ -2693,7 +2715,7 @@ Tips:
                     save();
                   }
                 }}
-                disabled={saving || !title || !body}
+                disabled={saving || !title || !body || !editSummary.trim() || !editorName.trim()}
                 className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-white text-[13px] font-medium disabled:opacity-50 transition-colors ${
                   isAIGenerated ? 'bg-amber-500 hover:bg-amber-600' : 'bg-brand hover:bg-brand-600'
                 }`}

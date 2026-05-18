@@ -130,7 +130,7 @@ function InlineDiff({
       </div>
 
       {/* diff lines */}
-      <div className="max-h-[240px] overflow-y-auto font-mono text-[11px] leading-[1.6]">
+      <div className="max-h-[240px] overflow-y-auto overscroll-contain font-mono text-[11px] leading-[1.6]">
         {isEmpty ? (
           // Just show the new content with green background
           newContent.body.split('\n').map((line, i) => (
@@ -461,7 +461,7 @@ export default function AIAssistant({
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-3 min-h-0">
         {messages.length === 0 && (
           <div className="space-y-3">
             <p className="text-[13px] text-muted text-center pt-4">

@@ -115,6 +115,9 @@ export default function FloatingAI({ currentPath }: { currentPath: string | null
     return () => document.removeEventListener('keydown', handle);
   }, [open]);
 
+  // Prevent background scroll while panel is open (handled by overscroll-contain in AIAssistant)
+  // Nothing extra needed here — the panel itself uses overscroll-contain
+
   function handleApply(payload: AIApplyPayload) {
     window.dispatchEvent(
       new CustomEvent('open-editor', {

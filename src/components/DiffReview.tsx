@@ -164,7 +164,7 @@ export default function DiffReview({
         </div>
 
         {/* Diff view */}
-        <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="flex-1 overflow-y-auto overscroll-contain min-h-0">
           <div className="font-mono text-[12px] leading-5">
             {collapsed.map((entry, i) => {
               if ('skipped' in entry) {
